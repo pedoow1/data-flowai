@@ -72,14 +72,12 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
+      { title: "DataFlow AI — AI-powered PDF data extraction" },
+      { name: "description", content: "Extract structured data from PDFs in seconds. Confidence-scored, editable, exportable. Zero data retention." },
+      { property: "og:title", content: "DataFlow AI" },
+      { property: "og:description", content: "Turn PDFs into structured data — in seconds." },
       { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary" },
-      { name: "twitter:site", content: "@Lovable" },
+      { name: "twitter:card", content: "summary_large_image" },
     ],
     links: [
       {
