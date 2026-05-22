@@ -81,23 +81,25 @@ function Dashboard() {
       const { text, pages } = await extractPdfText(file);
       const res = await extract({ data: { text, fileName: file.name } });
 
-      if (!(res as { ok: boolean }).ok) {
-        const error = (res as { error: string }).error;
-        track("file_upload_failure", { reason: error, pages, duration_ms: Date.now() - started });
-        logEvent("extract-error", error);
+      const result = res as
+        | { ok: false; error: string }
+        | { ok: true; row: Omit<ExtractedRow, "id" | "fileName"> };
+
+      if (!result.ok) {
+        track("file_upload_failure", { reason: result.error, pages, duration_ms: Date.now() - started });
+        logEvent("extract-error", result.error);
         toast.error("Extraction failed", {
-          description: error,
+          description: result.error,
           action: { label: "Retry", onClick: () => runExtraction(file) },
         });
         setScanning(false);
         return;
       }
 
-      const row = (res as { row: ExtractedRow["invoiceNumber"] extends unknown ? any : never }).row;
       const extracted: ExtractedRow = {
         id: crypto.randomUUID(),
         fileName: file.name,
-        ...row,
+        ...result.row,
       };
 
       // Consume rate limit only on success
