@@ -39,14 +39,12 @@ export function exportCSV(rows: ExtractedRow[]) {
   const csv = [headers.join(","), ...data.map(r => headers.map(h => `"${String(r[h as keyof typeof r]).replace(/"/g, '""')}"`).join(","))].join("\n");
   download(autoName(rows, "csv"), new Blob([csv], { type: "text/csv" }));
 }
-export function exportXLSX(rows: ExtractedRow[]) {
-  // Minimal SpreadsheetML 2003 XML — opens in Excel as .xls
+export async function exportXLSX(rows: ExtractedRow[]) {
+  const XLSX = await import("xlsx");
   const data = flatten(rows);
-  const headers = Object.keys(data[0]);
-  const row = (cells: string[]) => `<Row>${cells.map(c => `<Cell><Data ss:Type="String">${String(c).replace(/[<>&]/g, m => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" } as Record<string, string>)[m])}</Data></Cell>`).join("")}</Row>`;
-  const xml = `<?xml version="1.0"?>
-<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
-<Worksheet ss:Name="DataFlow"><Table>${row(headers)}${data.map(d => row(headers.map(h => String(d[h as keyof typeof d])))).join("")}</Table></Worksheet>
-</Workbook>`;
-  download(autoName(rows, "xls"), new Blob([xml], { type: "application/vnd.ms-excel" }));
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "DataFlow");
+  const out = XLSX.write(wb, { bookType: "xlsx", type: "array" }) as ArrayBuffer;
+  download(autoName(rows, "xlsx"), new Blob([out], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
 }
