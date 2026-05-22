@@ -47,11 +47,11 @@ export function Footer() {
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
           <span className="font-semibold text-foreground">DataFlow AI</span>
           <Link to="/pricing" className="hover:text-foreground">Pricing</Link>
-          <a href="#" className="hover:text-foreground">Privacy</a>
-          <a href="#" className="hover:text-foreground">Terms</a>
+          <Link to="/privacy" className="hover:text-foreground">Privacy</Link>
+          <Link to="/terms" className="hover:text-foreground">Terms</Link>
         </div>
         <p className="max-w-3xl leading-relaxed">
-          DataFlow AI provides automated extraction tools. Users are responsible for verifying all output data.
+          Your files are processed instantly and are never stored on our servers. We do not use your data to train our AI models. DataFlow AI provides automated extraction tools — users are responsible for verifying all output data.
         </p>
         <p>© {new Date().getFullYear()} DataFlow AI. All rights reserved.</p>
       </div>

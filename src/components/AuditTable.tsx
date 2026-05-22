@@ -81,9 +81,9 @@ export function AuditTable({
           <h3 className="font-semibold text-sm">Extracted Data · <span className="text-muted-foreground font-normal">{rows.length} record{rows.length > 1 ? "s" : ""}</span></h3>
         </div>
         <div className="flex flex-wrap gap-2">
-          <ExportBtn label="JSON" icon={<FileJson className="h-3.5 w-3.5" />} locked={locked} onClick={() => onExport("json")} />
-          <ExportBtn label="CSV" icon={<FileSpreadsheet className="h-3.5 w-3.5" />} locked={locked} onClick={() => onExport("csv")} />
-          <ExportBtn label="Excel" icon={<Download className="h-3.5 w-3.5" />} locked={locked} onClick={() => onExport("xlsx")} primary />
+          <ExportBtn label="JSON" icon={<FileJson className="h-3.5 w-3.5" />} locked={false} onClick={() => onExport("json")} />
+          <ExportBtn label="CSV" icon={<FileSpreadsheet className="h-3.5 w-3.5" />} locked={false} onClick={() => onExport("csv")} />
+          <ExportBtn label="Excel" icon={<Download className="h-3.5 w-3.5" />} locked={false} onClick={() => onExport("xlsx")} primary />
         </div>
       </div>
       <div className="overflow-x-auto">
