@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { supabaseAdmin } from "@/integrations/supabase/client.server";
 
 const Input = z.object({
   name: z.string().trim().min(1).max(120),
@@ -12,10 +13,10 @@ const TO = "abdalahkotp31@gmail.com";
 export const sendSupport = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => Input.parse(d))
   .handler(async ({ data }) => {
+    let delivered = false;
     const LOVABLE_API_KEY = process.env.LOVABLE_API_KEY;
     const RESEND_API_KEY = process.env.RESEND_API_KEY;
 
-    // If Resend is connected, send via the Lovable gateway.
     if (LOVABLE_API_KEY && RESEND_API_KEY) {
       try {
         const res = await fetch("https://connector-gateway.lovable.dev/resend/emails", {
@@ -35,19 +36,25 @@ export const sendSupport = createServerFn({ method: "POST" })
                    <pre style="white-space:pre-wrap;font-family:inherit">${escapeHtml(data.message)}</pre>`,
           }),
         });
-        if (!res.ok) {
-          const body = await res.text().catch(() => "");
-          return { ok: false as const, error: `Email service error (${res.status}). ${body.slice(0, 200)}` };
-        }
-        return { ok: true as const, delivered: true };
-      } catch (e: any) {
-        return { ok: false as const, error: e?.message || "Failed to send support message." };
+        delivered = res.ok;
+      } catch (e) {
+        console.error("[support] resend failed", e);
       }
     }
 
-    // No email provider connected — return ok so the UI thanks the user
-    // and store-and-forward on the client side via localStorage admin view.
-    return { ok: true as const, delivered: false };
+    // Always persist the ticket so the admin can see it in /admin
+    try {
+      await supabaseAdmin.from("support_tickets").insert({
+        name: data.name,
+        email: data.email || null,
+        message: data.message,
+        delivered,
+      });
+    } catch (e) {
+      console.error("[support] insert failed", e);
+    }
+
+    return { ok: true as const, delivered };
   });
 
 function escapeHtml(s: string) {

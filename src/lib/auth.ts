@@ -1,96 +1,94 @@
+// Supabase-backed auth + role hook.
+// Keeps the same useAuth() shape that the rest of the app already imports.
 import { useEffect, useState, useCallback } from "react";
+import { supabase } from "@/integrations/supabase/client";
 import { ADMIN_EMAIL } from "./config";
 
-const KEY = "dataflow_auth_email";
-const USERS_KEY = "dataflow_users";
-const ATTEMPTS_KEY = "dataflow_attempts";
-const TRAFFIC_KEY = "dataflow_traffic";
-const LOGS_KEY = "dataflow_logs";
-
+// Lightweight no-op event logger kept for backwards compatibility.
+// Real audit logging now lives in the database (uploads, subscriptions, support_tickets).
 export type LogEntry = { ts: number; type: string; detail: string };
-type StoredUser = { email: string; passwordHash: string; createdAt: number };
-
-function read<T>(k: string, fb: T): T {
-  if (typeof window === "undefined") return fb;
-  try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch { return fb; }
-}
-function write(k: string, v: unknown) {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(k, JSON.stringify(v));
-}
-
-// Lightweight non-cryptographic hash — sufficient for demo localStorage auth.
-function hash(s: string): string {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h) ^ s.charCodeAt(i);
-  return (h >>> 0).toString(36) + "_" + s.length.toString(36);
-}
-
-export function logEvent(type: string, detail: string) {
-  const logs = read<LogEntry[]>(LOGS_KEY, []);
-  logs.unshift({ ts: Date.now(), type, detail });
-  write(LOGS_KEY, logs.slice(0, 200));
-}
-
-export function getLogs(): LogEntry[] { return read<LogEntry[]>(LOGS_KEY, []); }
-export function getAttempts(): { email: string; ts: number; success: boolean }[] {
-  return read(ATTEMPTS_KEY, []);
-}
-export function getUsers(): StoredUser[] { return read<StoredUser[]>(USERS_KEY, []); }
-export function getTraffic(): number { return read<number>(TRAFFIC_KEY, 0); }
-export function bumpTraffic() { write(TRAFFIC_KEY, getTraffic() + 1); }
-
-function recordAttempt(email: string, success: boolean) {
-  const attempts = read<{ email: string; ts: number; success: boolean }[]>(ATTEMPTS_KEY, []);
-  attempts.unshift({ email, ts: Date.now(), success });
-  write(ATTEMPTS_KEY, attempts.slice(0, 100));
+export function logEvent(_type: string, _detail: string) {
+  // intentional no-op
 }
 
 export function useAuth() {
   const [email, setEmail] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [ready, setReady] = useState(false);
 
-  useEffect(() => {
-    setEmail(read<string | null>(KEY, null));
-    setReady(true);
+  // Refresh admin role from user_roles table.
+  const refreshRole = useCallback(async (uid: string | null, mail: string | null) => {
+    if (!uid) { setIsAdmin(false); return; }
+    // Fast path: known admin email
+    if (mail && mail.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+      setIsAdmin(true);
+      return;
+    }
+    const { data } = await supabase
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", uid)
+      .eq("role", "admin")
+      .maybeSingle();
+    setIsAdmin(!!data);
   }, []);
 
-  const signup = useCallback((e: string, password: string): { ok: boolean; error?: string } => {
+  useEffect(() => {
+    // Listener first, then initial session.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      const u = session?.user ?? null;
+      setUserId(u?.id ?? null);
+      setEmail(u?.email ?? null);
+      // Defer role lookup to avoid blocking the auth callback.
+      setTimeout(() => { void refreshRole(u?.id ?? null, u?.email ?? null); }, 0);
+    });
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      const u = session?.user ?? null;
+      setUserId(u?.id ?? null);
+      setEmail(u?.email ?? null);
+      void refreshRole(u?.id ?? null, u?.email ?? null).finally(() => setReady(true));
+    });
+
+    return () => subscription.unsubscribe();
+  }, [refreshRole]);
+
+  const signup = useCallback(async (e: string, password: string): Promise<{ ok: boolean; error?: string }> => {
     const normalized = e.trim().toLowerCase();
     if (!/^\S+@\S+\.\S+$/.test(normalized)) return { ok: false, error: "Enter a valid email address." };
     if (password.length < 6) return { ok: false, error: "Password must be at least 6 characters." };
-    const users = getUsers();
-    if (users.some(u => u.email === normalized)) return { ok: false, error: "An account with this email already exists. Try signing in." };
-    users.push({ email: normalized, passwordHash: hash(password), createdAt: Date.now() });
-    write(USERS_KEY, users);
-    write(KEY, normalized);
-    setEmail(normalized);
-    logEvent("auth", `Signup: ${normalized}`);
-    return { ok: true };
-  }, []);
-
-  const login = useCallback((e: string, password: string): { ok: boolean; error?: string } => {
-    const normalized = e.trim().toLowerCase();
-    const users = getUsers();
-    const user = users.find(u => u.email === normalized);
-    if (!user || user.passwordHash !== hash(password)) {
-      recordAttempt(normalized, false);
-      logEvent("auth", `Login failed: ${normalized}`);
-      return { ok: false, error: "Incorrect email or password." };
+    const { error } = await supabase.auth.signUp({
+      email: normalized,
+      password,
+      options: { emailRedirectTo: typeof window !== "undefined" ? window.location.origin : undefined },
+    });
+    if (error) {
+      if (/registered|already/i.test(error.message)) {
+        return { ok: false, error: "An account with this email already exists. Try signing in." };
+      }
+      return { ok: false, error: error.message };
     }
-    recordAttempt(normalized, true);
-    write(KEY, normalized);
-    setEmail(normalized);
-    logEvent("auth", `Login success: ${normalized}`);
     return { ok: true };
   }, []);
 
-  const logout = useCallback(() => {
-    logEvent("auth", `Logout: ${email}`);
-    localStorage.removeItem(KEY);
-    setEmail(null);
-  }, [email]);
+  const login = useCallback(async (e: string, password: string): Promise<{ ok: boolean; error?: string }> => {
+    const normalized = e.trim().toLowerCase();
+    const { error } = await supabase.auth.signInWithPassword({ email: normalized, password });
+    if (error) return { ok: false, error: "Incorrect email or password." };
+    return { ok: true };
+  }, []);
 
-  const isAdmin = email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
-  return { email, isAdmin, isAuthed: !!email, ready, login, signup, logout };
+  const logout = useCallback(async () => {
+    await supabase.auth.signOut();
+  }, []);
+
+  return { email, userId, isAdmin, isAuthed: !!userId, ready, login, signup, logout };
 }
+
+// Deprecated localStorage analytics — return empty arrays so old admin code compiles.
+export function getLogs(): LogEntry[] { return []; }
+export function getAttempts(): { email: string; ts: number; success: boolean }[] { return []; }
+export function getUsers(): { email: string; createdAt: number }[] { return []; }
+export function getTraffic(): number { return 0; }
+export function bumpTraffic() { /* no-op */ }
