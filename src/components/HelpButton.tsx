@@ -4,8 +4,6 @@ import { toast } from "sonner";
 import { useServerFn } from "@tanstack/react-start";
 import { sendSupport } from "@/lib/support.functions";
 
-const TICKETS_KEY = "dataflow_support_tickets";
-
 export function HelpButton({ defaultEmail = "" }: { defaultEmail?: string }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -18,19 +16,12 @@ export function HelpButton({ defaultEmail = "" }: { defaultEmail?: string }) {
     e.preventDefault();
     setLoading(true);
     try {
-      const res = await send({ data: { name, email, message } });
-      // Always store locally so admin can see, regardless of email provider state
-      try {
-        const arr = JSON.parse(localStorage.getItem(TICKETS_KEY) || "[]");
-        arr.unshift({ name, email, message, ts: Date.now(), delivered: (res as any)?.delivered ?? false });
-        localStorage.setItem(TICKETS_KEY, JSON.stringify(arr.slice(0, 200)));
-      } catch { /* noop */ }
-
-      if ((res as any).ok) {
-        toast.success("Thank you! Your message has been received.");
+      const res = (await send({ data: { name, email, message } })) as { ok: boolean; delivered?: boolean; error?: string };
+      if (res.ok) {
+        toast.success(res.delivered ? "Message sent — we'll be in touch." : "Thanks! Your message has been received.");
         setOpen(false); setName(""); setMessage("");
       } else {
-        toast.error((res as any).error || "Could not send your message. Please try again.");
+        toast.error(res.error || "Could not send your message. Please try again.");
       }
     } catch (err: any) {
       toast.error(err?.message || "Could not send your message.");

@@ -18,15 +18,13 @@ function LoginPage() {
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErr(null); setLoading(true);
-    setTimeout(() => {
-      const res = login(email, password);
-      setLoading(false);
-      if (res.ok) nav({ to: "/dashboard" });
-      else setErr(res.error ?? "Sign in failed.");
-    }, 400);
+    const res = await login(email, password);
+    setLoading(false);
+    if (res.ok) nav({ to: "/dashboard" });
+    else setErr(res.error ?? "Sign in failed.");
   };
 
   return (

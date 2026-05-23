@@ -18,6 +18,7 @@ const RowSchema = z.object({
 
 const MODEL = "Qwen/Qwen2.5-7B-Instruct-1M";
 const HF_URL = `https://api-inference.huggingface.co/models/${MODEL}/v1/chat/completions`;
+const TIMEOUT_MS = 120_000;
 
 const SYSTEM = `You are a precise document extraction engine. Given raw text from a PDF (invoice, receipt, bill, report, or similar), extract the most likely structured fields and return ONLY valid JSON matching this exact TypeScript type:
 
@@ -37,66 +38,112 @@ Rules:
 - Currency values should include the currency symbol if present in the text.
 - Dates should be ISO YYYY-MM-DD when possible.`;
 
+async function callHF(apiKey: string, body: unknown): Promise<{ status: number; bodyText: string }> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(HF_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "x-wait-for-model": "true",
+      },
+      signal: controller.signal,
+      body: JSON.stringify(body),
+    });
+    const bodyText = await res.text();
+    return { status: res.status, bodyText };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export const extractFromText = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => InputSchema.parse(data))
   .handler(async ({ data }) => {
     const apiKey = process.env.HF_API_KEY;
     if (!apiKey) {
+      console.error("[extract] Missing HF_API_KEY env var");
       return { ok: false as const, error: "Server is not configured (missing HF_API_KEY)." };
     }
     if (data.text.length < 20) {
-      return { ok: false as const, error: "Could not read text from this PDF. It may be a scanned image (OCR not supported)." };
+      return {
+        ok: false as const,
+        error: "Could not read text from this PDF. It may be a scanned image (OCR not supported).",
+      };
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60_000);
+    const requestBody = {
+      model: MODEL,
+      messages: [
+        { role: "system", content: SYSTEM },
+        { role: "user", content: `Document: ${data.fileName}\n\n---\n${data.text.slice(0, 80_000)}` },
+      ],
+      temperature: 0.1,
+      max_tokens: 600,
+      response_format: { type: "json_object" },
+    };
 
-    try {
-      const res = await fetch(HF_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: MODEL,
-          messages: [
-            { role: "system", content: SYSTEM },
-            { role: "user", content: `Document: ${data.fileName}\n\n---\n${data.text.slice(0, 80_000)}` },
-          ],
-          temperature: 0.1,
-          max_tokens: 600,
-          response_format: { type: "json_object" },
-        }),
-      });
+    let attempt = 0;
+    let lastError = "Unknown error";
+    while (attempt < 3) {
+      attempt++;
+      try {
+        const { status, bodyText } = await callHF(apiKey, requestBody);
 
-      if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        if (res.status === 503) return { ok: false as const, error: "AI model is warming up. Please retry in a few seconds." };
-        if (res.status === 429) return { ok: false as const, error: "AI service is rate-limiting requests. Please retry shortly." };
-        if (res.status === 401 || res.status === 403) return { ok: false as const, error: "AI service authentication failed." };
-        return { ok: false as const, error: `AI service error (${res.status}). ${body.slice(0, 200)}` };
+        if (status === 200) {
+          let json: any;
+          try { json = JSON.parse(bodyText); }
+          catch { return { ok: false as const, error: "AI service returned invalid JSON envelope." }; }
+
+          const content: string = json?.choices?.[0]?.message?.content ?? "";
+          const cleaned = content.trim().replace(/^```json\s*/i, "").replace(/```$/i, "").trim();
+
+          let parsed: unknown;
+          try { parsed = JSON.parse(cleaned); }
+          catch {
+            console.error("[extract] Model returned unparseable content:", content.slice(0, 300));
+            return { ok: false as const, error: "AI returned an unparseable response. Please retry." };
+          }
+
+          const validated = RowSchema.safeParse(parsed);
+          if (!validated.success) {
+            console.error("[extract] Schema mismatch:", JSON.stringify(validated.error.issues).slice(0, 300));
+            return { ok: false as const, error: "AI response missing required fields. Please retry." };
+          }
+          return { ok: true as const, row: validated.data };
+        }
+
+        // Non-200 — log and decide whether to retry
+        console.error(`[extract] HF API ${status}:`, bodyText.slice(0, 400));
+
+        if (status === 503 || status === 524) {
+          lastError = "AI model is warming up.";
+          await new Promise((r) => setTimeout(r, 5000 * attempt));
+          continue;
+        }
+        if (status === 429) {
+          lastError = "AI service is rate-limiting requests.";
+          await new Promise((r) => setTimeout(r, 3000 * attempt));
+          continue;
+        }
+        if (status === 401 || status === 403) {
+          return { ok: false as const, error: "AI service authentication failed (invalid HF_API_KEY)." };
+        }
+        if (status === 404) {
+          return { ok: false as const, error: `AI model not found: ${MODEL}.` };
+        }
+        return { ok: false as const, error: `AI service error (${status}): ${bodyText.slice(0, 200)}` };
+      } catch (e: any) {
+        const isAbort = e?.name === "AbortError";
+        lastError = isAbort ? "Extraction timed out." : (e?.message || "Network error");
+        console.error("[extract] Fetch failed:", lastError, e);
+        if (isAbort) break;
+        // Network error — retry once more
+        await new Promise((r) => setTimeout(r, 2000));
       }
-
-      const json: any = await res.json();
-      const content: string = json?.choices?.[0]?.message?.content ?? "";
-      const cleaned = content.trim().replace(/^```json\s*/i, "").replace(/```$/i, "").trim();
-
-      let parsed: unknown;
-      try { parsed = JSON.parse(cleaned); }
-      catch { return { ok: false as const, error: "AI returned an unparseable response. Please retry." }; }
-
-      const validated = RowSchema.safeParse(parsed);
-      if (!validated.success) {
-        return { ok: false as const, error: "AI response missing required fields. Please retry." };
-      }
-
-      return { ok: true as const, row: validated.data };
-    } catch (e: any) {
-      if (e?.name === "AbortError") return { ok: false as const, error: "Extraction timed out. Please try a smaller document." };
-      return { ok: false as const, error: e?.message || "Unknown error during extraction." };
-    } finally {
-      clearTimeout(timeout);
     }
+
+    return { ok: false as const, error: `${lastError} Please try again in a few seconds.` };
   });
