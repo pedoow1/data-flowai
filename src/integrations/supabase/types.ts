@@ -14,16 +14,163 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      pending_subscriptions: {
+        Row: {
+          created_at: string
+          email: string
+          gumroad_sale_id: string | null
+          gumroad_subscription_id: string | null
+          plan: Database["public"]["Enums"]["plan_tier"]
+        }
+        Insert: {
+          created_at?: string
+          email: string
+          gumroad_sale_id?: string | null
+          gumroad_subscription_id?: string | null
+          plan: Database["public"]["Enums"]["plan_tier"]
+        }
+        Update: {
+          created_at?: string
+          email?: string
+          gumroad_sale_id?: string | null
+          gumroad_subscription_id?: string | null
+          plan?: Database["public"]["Enums"]["plan_tier"]
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          created_at: string
+          email: string
+          id: string
+        }
+        Insert: {
+          created_at?: string
+          email: string
+          id: string
+        }
+        Update: {
+          created_at?: string
+          email?: string
+          id?: string
+        }
+        Relationships: []
+      }
+      subscriptions: {
+        Row: {
+          gumroad_sale_id: string | null
+          gumroad_subscription_id: string | null
+          plan: Database["public"]["Enums"]["plan_tier"]
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          gumroad_sale_id?: string | null
+          gumroad_subscription_id?: string | null
+          plan?: Database["public"]["Enums"]["plan_tier"]
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          gumroad_sale_id?: string | null
+          gumroad_subscription_id?: string | null
+          plan?: Database["public"]["Enums"]["plan_tier"]
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      support_tickets: {
+        Row: {
+          created_at: string
+          delivered: boolean
+          email: string | null
+          id: string
+          message: string
+          name: string
+        }
+        Insert: {
+          created_at?: string
+          delivered?: boolean
+          email?: string | null
+          id?: string
+          message: string
+          name: string
+        }
+        Update: {
+          created_at?: string
+          delivered?: boolean
+          email?: string | null
+          id?: string
+          message?: string
+          name?: string
+        }
+        Relationships: []
+      }
+      uploads: {
+        Row: {
+          created_at: string
+          file_name: string
+          id: string
+          status: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          file_name: string
+          id?: string
+          status?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          file_name?: string
+          id?: string
+          status?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      user_roles: {
+        Row: {
+          created_at: string
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
     }
     Enums: {
-      [_ in never]: never
+      app_role: "admin" | "user"
+      plan_tier: "free" | "pro" | "team"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +297,9 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      app_role: ["admin", "user"],
+      plan_tier: ["free", "pro", "team"],
+    },
   },
 } as const
