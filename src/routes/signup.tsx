@@ -19,17 +19,15 @@ function SignupPage() {
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErr(null);
     if (password !== confirm) { setErr("Passwords do not match."); return; }
     setLoading(true);
-    setTimeout(() => {
-      const res = signup(email, password);
-      setLoading(false);
-      if (res.ok) nav({ to: "/dashboard" });
-      else setErr(res.error ?? "Sign up failed.");
-    }, 400);
+    const res = await signup(email, password);
+    setLoading(false);
+    if (res.ok) nav({ to: "/dashboard" });
+    else setErr(res.error ?? "Sign up failed.");
   };
 
   return (

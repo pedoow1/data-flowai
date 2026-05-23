@@ -1,5 +1,5 @@
 import { createFileRoute, Navigate, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import { Header } from "@/components/Layout";
@@ -9,14 +9,13 @@ import { AuditTable, ScanningSkeleton, type ExtractedRow } from "@/components/Au
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { PdfPreview } from "@/components/PdfPreview";
 import { HelpButton } from "@/components/HelpButton";
-import { useAuth, logEvent } from "@/lib/auth";
-import { usePlan } from "@/lib/usage";
+import { useAuth } from "@/lib/auth";
 import { extractFromText } from "@/lib/extract.functions";
 import { extractPdfText } from "@/lib/pdf";
-import { getUsage, consume, DAILY_LIMIT } from "@/lib/rateLimit";
+import { getMyUsage, recordUpload } from "@/lib/usage.functions";
 import { exportJSON, exportCSV, exportXLSX } from "@/lib/exporters";
 import { track, identify } from "@/lib/analytics";
-import { History, Settings, Gauge, Zap, Sparkles, Check, Trash2, RotateCcw, FileText, AlertTriangle } from "lucide-react";
+import { History, Settings, Gauge, Zap, Sparkles, Trash2, FileText, AlertTriangle, Infinity as InfinityIcon } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard")({
   head: () => ({ meta: [{ title: "Dashboard — DataFlow AI" }] }),
@@ -25,6 +24,8 @@ export const Route = createFileRoute("/dashboard")({
 
 type Tab = "extract" | "history" | "settings";
 const HISTORY_KEY = "dataflow_history";
+
+type Usage = { plan: "free" | "pro" | "team"; used: number; limit: number; remaining: number; unlimited: boolean };
 
 function loadHistory(): ExtractedRow[] {
   try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); } catch { return []; }
@@ -35,42 +36,45 @@ function saveHistory(rows: ExtractedRow[]) {
 
 function Dashboard() {
   const { isAuthed, ready, email, isAdmin } = useAuth();
-  const { plan, setPlan } = usePlan();
   const [rows, setRows] = useState<ExtractedRow[]>([]);
   const [history, setHistory] = useState<ExtractedRow[]>([]);
   const [currentFile, setCurrentFile] = useState<File | null>(null);
   const [scanning, setScanning] = useState(false);
   const [upgrade, setUpgrade] = useState(false);
   const [tab, setTab] = useState<Tab>("extract");
-  const [usage, setUsage] = useState({ used: 0, remaining: DAILY_LIMIT, limit: DAILY_LIMIT });
+  const [usage, setUsage] = useState<Usage>({ plan: "free", used: 0, limit: 2, remaining: 2, unlimited: false });
   const [lastFile, setLastFile] = useState<File | null>(null);
   const extract = useServerFn(extractFromText);
+  const fetchUsage = useServerFn(getMyUsage);
+  const logUpload = useServerFn(recordUpload);
+
+  const refreshUsage = useCallback(async () => {
+    try {
+      const u = (await fetchUsage()) as Usage;
+      setUsage(u);
+    } catch { /* noop */ }
+  }, [fetchUsage]);
 
   useEffect(() => { setHistory(loadHistory()); }, []);
-  useEffect(() => { if (email) { setUsage(getUsage(email)); identify(email); } }, [email]);
-
-  // RBAC: only admin email gets Pro plan automatically.
   useEffect(() => {
     if (!email) return;
-    if (isAdmin && plan !== "team") setPlan("team");
-    if (!isAdmin && plan !== "free") setPlan("free");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [email, isAdmin]);
+    identify(email);
+    void refreshUsage();
+  }, [email, refreshUsage]);
 
   if (ready && !isAuthed) return <Navigate to="/login" />;
 
   const runExtraction = async (file: File) => {
     if (!email) return;
 
-    const check = getUsage(email);
-    if (check.remaining <= 0) {
+    if (!usage.unlimited && usage.remaining <= 0) {
       toast.error("Daily limit reached", {
-        description: `You've used all ${DAILY_LIMIT} uploads today. Please try again tomorrow.`,
+        description: `You've used all ${usage.limit} uploads today on the ${usage.plan.toUpperCase()} plan.`,
+        action: { label: "Upgrade", onClick: () => setUpgrade(true) },
       });
       return;
     }
 
-    // Clear table immediately + show processing state
     setRows([]);
     setCurrentFile(file);
     setLastFile(file);
@@ -80,14 +84,12 @@ function Dashboard() {
     try {
       const { text, pages } = await extractPdfText(file);
       const res = await extract({ data: { text, fileName: file.name } });
-
       const result = res as
         | { ok: false; error: string }
         | { ok: true; row: Omit<ExtractedRow, "id" | "fileName"> };
 
       if (!result.ok) {
         track("file_upload_failure", { reason: result.error, pages, duration_ms: Date.now() - started });
-        logEvent("extract-error", result.error);
         toast.error("Extraction failed", {
           description: result.error,
           action: { label: "Retry", onClick: () => runExtraction(file) },
@@ -96,35 +98,34 @@ function Dashboard() {
         return;
       }
 
-      const extracted: ExtractedRow = {
-        id: crypto.randomUUID(),
-        fileName: file.name,
-        ...result.row,
-      };
+      const extracted: ExtractedRow = { id: crypto.randomUUID(), fileName: file.name, ...result.row };
 
-      // Consume rate limit only on success
-      consume(email);
-      const next = getUsage(email);
-      setUsage(next);
+      // Record successful upload server-side (atomic: enforces plan limit too)
+      const recorded = (await logUpload({ data: { fileName: file.name } })) as
+        | { ok: true; usage: Usage }
+        | { ok: false; error: string; usage: Usage };
+      if (!recorded.ok) {
+        setUsage(recorded.usage);
+        toast.error(recorded.error);
+        setScanning(false);
+        return;
+      }
+      setUsage(recorded.usage);
 
-      // Populate with ONLY the current file's data
       setRows([extracted]);
       const newHistory = [extracted, ...history];
       setHistory(newHistory);
       saveHistory(newHistory);
 
       track("file_upload_success", { pages, duration_ms: Date.now() - started });
-      logEvent("extract", `Extracted ${file.name}`);
-
       toast.success("Extraction complete", { description: `${file.name} processed in ${((Date.now() - started) / 1000).toFixed(1)}s` });
 
-      if (next.remaining > 0 && next.remaining <= 10) {
-        toast.warning(`You have ${next.remaining} upload${next.remaining === 1 ? "" : "s"} remaining today`);
+      if (!recorded.usage.unlimited && recorded.usage.remaining > 0 && recorded.usage.remaining <= 10) {
+        toast.warning(`You have ${recorded.usage.remaining} upload${recorded.usage.remaining === 1 ? "" : "s"} remaining today`);
       }
     } catch (e: unknown) {
       const error = e instanceof Error ? e.message : "Unknown error";
       track("file_upload_failure", { reason: error, duration_ms: Date.now() - started });
-      logEvent("extract-error", error);
       toast.error("Could not process file", {
         description: error,
         action: { label: "Retry", onClick: () => runExtraction(file) },
@@ -135,7 +136,6 @@ function Dashboard() {
   };
 
   const onFiles = async (files: File[]) => {
-    // Single-file flow per spec: only process the most recent file.
     if (files.length === 0) return;
     if (files.length > 1) {
       toast.info("Processing the most recent file", { description: "Side-by-side preview supports one document at a time." });
@@ -148,7 +148,6 @@ function Dashboard() {
     if (fmt === "json") exportJSON(source);
     if (fmt === "csv") exportCSV(source);
     if (fmt === "xlsx") exportXLSX(source);
-    logEvent("export", `Exported ${source.length} row(s) as ${fmt}`);
     toast.success(`Export successful · ${fmt.toUpperCase()}`);
   };
 
@@ -163,7 +162,7 @@ function Dashboard() {
       <Header />
       <main className="flex-1 mx-auto max-w-7xl px-4 sm:px-6 py-6 sm:py-8 w-full">
         <div className="grid lg:grid-cols-[260px_1fr] gap-6">
-          <Sidebar usage={usage} plan={plan} onUpgrade={() => setUpgrade(true)} tab={tab} setTab={setTab} isAdmin={isAdmin} />
+          <Sidebar usage={usage} onUpgrade={() => setUpgrade(true)} tab={tab} setTab={setTab} isAdmin={isAdmin} />
 
           <div className="min-w-0">
             {tab === "extract" && (
@@ -180,7 +179,6 @@ function Dashboard() {
 
                 <FileUploader onFiles={onFiles} disabled={scanning} />
 
-                {/* Side-by-side: PDF preview (left) + data table (right), stacks on mobile */}
                 <div className="mt-6 grid lg:grid-cols-2 gap-4">
                   <PdfPreview file={currentFile} />
                   <div>
@@ -209,13 +207,7 @@ function Dashboard() {
             )}
 
             {tab === "settings" && (
-              <SettingsView
-                email={email}
-                isAdmin={isAdmin}
-                plan={plan}
-                usage={usage}
-                onUpgrade={() => setUpgrade(true)}
-              />
+              <SettingsView email={email} isAdmin={isAdmin} usage={usage} onUpgrade={() => setUpgrade(true)} />
             )}
           </div>
         </div>
@@ -228,38 +220,49 @@ function Dashboard() {
   );
 }
 
-function Sidebar({ usage, plan, onUpgrade, tab, setTab, isAdmin }: {
-  usage: { used: number; remaining: number; limit: number };
-  plan: string; onUpgrade: () => void; tab: Tab; setTab: (t: Tab) => void; isAdmin: boolean;
+function Sidebar({ usage, onUpgrade, tab, setTab, isAdmin }: {
+  usage: Usage; onUpgrade: () => void; tab: Tab; setTab: (t: Tab) => void; isAdmin: boolean;
 }) {
-  const pct = Math.min(100, (usage.used / usage.limit) * 100);
+  const pct = usage.unlimited ? 0 : Math.min(100, (usage.used / Math.max(1, usage.limit)) * 100);
   const items: { id: Tab; i: React.ReactNode; t: string }[] = [
     { id: "extract", i: <Gauge className="h-4 w-4" />, t: "Extract" },
     { id: "history", i: <History className="h-4 w-4" />, t: "History" },
     { id: "settings", i: <Settings className="h-4 w-4" />, t: "Settings" },
   ];
-  const warning = usage.remaining <= 10;
+  const warning = !usage.unlimited && usage.remaining <= 10;
   return (
     <aside className="space-y-4 lg:sticky lg:top-20 self-start">
       <div className="glass rounded-2xl p-5">
         <div className="flex items-center justify-between text-xs text-muted-foreground uppercase tracking-wider">
           <span>Daily usage</span>
-          <span className="text-lime font-mono">{plan.toUpperCase()}</span>
+          <span className="text-lime font-mono">{usage.plan.toUpperCase()}</span>
         </div>
-        <div className="mt-3 flex items-baseline gap-1.5">
-          <span className="text-3xl font-bold">{usage.used}</span>
-          <span className="text-muted-foreground text-sm">/ {usage.limit}</span>
-        </div>
-        <div className={`mt-3 h-1.5 bg-white/5 rounded-full overflow-hidden`}>
-          <div className={`h-full transition-all ${warning ? "bg-yellow-400" : "bg-lime"}`} style={{ width: `${pct}%` }} />
-        </div>
-        <p className={`mt-2 text-xs flex items-center gap-1 ${warning ? "text-yellow-400" : "text-muted-foreground"}`}>
-          {warning && <AlertTriangle className="h-3 w-3" />}
-          You have {usage.remaining} upload{usage.remaining === 1 ? "" : "s"} remaining today
-        </p>
-        {!isAdmin && (
+        {usage.unlimited ? (
+          <>
+            <div className="mt-3 flex items-baseline gap-1.5">
+              <span className="text-3xl font-bold">{usage.used}</span>
+              <span className="text-muted-foreground text-sm inline-flex items-center gap-1">/ <InfinityIcon className="h-4 w-4" /></span>
+            </div>
+            <p className="mt-3 text-xs text-lime">Unlimited uploads on Team plan</p>
+          </>
+        ) : (
+          <>
+            <div className="mt-3 flex items-baseline gap-1.5">
+              <span className="text-3xl font-bold">{usage.used}</span>
+              <span className="text-muted-foreground text-sm">/ {usage.limit}</span>
+            </div>
+            <div className="mt-3 h-1.5 bg-white/5 rounded-full overflow-hidden">
+              <div className={`h-full transition-all ${warning ? "bg-yellow-400" : "bg-lime"}`} style={{ width: `${pct}%` }} />
+            </div>
+            <p className={`mt-2 text-xs flex items-center gap-1 ${warning ? "text-yellow-400" : "text-muted-foreground"}`}>
+              {warning && <AlertTriangle className="h-3 w-3" />}
+              You have {usage.remaining} upload{usage.remaining === 1 ? "" : "s"} remaining today
+            </p>
+          </>
+        )}
+        {usage.plan !== "team" && (
           <button onClick={onUpgrade} className="mt-4 w-full inline-flex items-center justify-center gap-1.5 text-xs font-semibold bg-lime text-primary-foreground py-2 rounded-lg hover:opacity-90">
-            <Zap className="h-3.5 w-3.5" /> Upgrade to Pro
+            <Zap className="h-3.5 w-3.5" /> Upgrade
           </button>
         )}
       </div>
@@ -311,9 +314,8 @@ function HistoryView({ history, onClear, onExport }: {
   );
 }
 
-function SettingsView({ email, isAdmin, plan, usage, onUpgrade }: {
-  email: string | null; isAdmin: boolean; plan: string;
-  usage: { used: number; remaining: number; limit: number }; onUpgrade: () => void;
+function SettingsView({ email, isAdmin, usage, onUpgrade }: {
+  email: string | null; isAdmin: boolean; usage: Usage; onUpgrade: () => void;
 }) {
   return (
     <>
@@ -325,14 +327,14 @@ function SettingsView({ email, isAdmin, plan, usage, onUpgrade }: {
         <Card title="Account">
           <Row label="Email" value={email || "—"} />
           <Row label="Role" value={isAdmin ? "Admin" : "Member"} />
-          <Row label="Plan" value={plan.toUpperCase()} />
+          <Row label="Plan" value={usage.plan.toUpperCase()} />
         </Card>
 
         <Card title="Usage (last 24 hours)">
           <Row label="Uploads used" value={String(usage.used)} />
-          <Row label="Remaining" value={String(usage.remaining)} />
-          <Row label="Daily limit" value={String(usage.limit)} />
-          {!isAdmin && (
+          <Row label="Remaining" value={usage.unlimited ? "Unlimited" : String(usage.remaining)} />
+          <Row label="Daily limit" value={usage.unlimited ? "Unlimited" : String(usage.limit)} />
+          {usage.plan !== "team" && (
             <button onClick={onUpgrade} className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold bg-lime text-primary-foreground px-3 py-1.5 rounded-lg hover:opacity-90">
               <Zap className="h-3.5 w-3.5" /> Upgrade for higher limits
             </button>
