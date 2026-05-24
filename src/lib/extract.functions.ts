@@ -117,10 +117,10 @@ export const extractFromText = createServerFn({ method: "POST" })
         }
 
         // Non-200 — log and decide whether to retry
-        console.error(`[extract] HF API ${status}:`, bodyText.slice(0, 400));
+        console.error(`[extract] OpenRouter API ${status}:`, bodyText.slice(0, 400));
 
-        if (status === 503 || status === 524) {
-          lastError = "AI model is warming up.";
+        if (status === 503 || status === 524 || status === 502) {
+          lastError = "AI service is temporarily unavailable.";
           await new Promise((r) => setTimeout(r, 5000 * attempt));
           continue;
         }
@@ -130,7 +130,7 @@ export const extractFromText = createServerFn({ method: "POST" })
           continue;
         }
         if (status === 401 || status === 403) {
-          return { ok: false as const, error: "AI service authentication failed (invalid HF_API_KEY)." };
+          return { ok: false as const, error: "AI service authentication failed (invalid OPENROUTER_API_KEY)." };
         }
         if (status === 404) {
           return { ok: false as const, error: `AI model not found: ${MODEL}.` };
