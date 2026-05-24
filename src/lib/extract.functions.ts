@@ -63,10 +63,10 @@ async function callAI(apiKey: string, body: unknown): Promise<{ status: number; 
 export const extractFromText = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => InputSchema.parse(data))
   .handler(async ({ data }) => {
-    const apiKey = process.env.HF_API_KEY;
+    const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) {
-      console.error("[extract] Missing HF_API_KEY env var");
-      return { ok: false as const, error: "Server is not configured (missing HF_API_KEY)." };
+      console.error("[extract] Missing OPENROUTER_API_KEY env var");
+      return { ok: false as const, error: "Server is not configured (missing OPENROUTER_API_KEY)." };
     }
     if (data.text.length < 20) {
       return {
@@ -91,7 +91,7 @@ export const extractFromText = createServerFn({ method: "POST" })
     while (attempt < 3) {
       attempt++;
       try {
-        const { status, bodyText } = await callHF(apiKey, requestBody);
+        const { status, bodyText } = await callAI(apiKey, requestBody);
 
         if (status === 200) {
           let json: any;
