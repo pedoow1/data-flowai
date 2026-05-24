@@ -16,8 +16,8 @@ const RowSchema = z.object({
   total: CellSchema,
 });
 
-const MODEL = "Qwen/Qwen2.5-7B-Instruct-1M";
-const HF_URL = `https://api-inference.huggingface.co/models/${MODEL}/v1/chat/completions`;
+const MODEL = "qwen/qwen-2.5-7b-instruct:free";
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const TIMEOUT_MS = 120_000;
 
 const SYSTEM = `You are a precise document extraction engine. Given raw text from a PDF (invoice, receipt, bill, report, or similar), extract the most likely structured fields and return ONLY valid JSON matching this exact TypeScript type:
