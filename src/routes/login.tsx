@@ -28,6 +28,12 @@ function LoginPage() {
     else setErr(res.error ?? "Sign in failed.");
   };
 
+  const googleSignIn = async () => {
+    setErr(null);
+    const res = await lovable.auth.signInWithOAuth("google", { redirect_uri: window.location.origin + "/dashboard" });
+    if (res.error) setErr(res.error.message || "Google sign-in failed.");
+  };
+
   return (
     <div className="min-h-screen flex flex-col">
       <Header />
