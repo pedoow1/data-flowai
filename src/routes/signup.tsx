@@ -13,7 +13,7 @@ export const Route = createFileRoute("/signup")({
 
 function SignupPage() {
   const { signup } = useAuth();
-  const nav = useNavigate();
+  void useNavigate;
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
