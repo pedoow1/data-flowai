@@ -8,18 +8,21 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 async function getPlanAndUsage(supabase: any, userId: string) {
   const since = new Date(Date.now() - DAY_MS).toISOString();
-  const [subRes, countRes] = await Promise.all([
+  const [subRes, countRes, adminRes] = await Promise.all([
     supabase.from("subscriptions").select("plan").eq("user_id", userId).maybeSingle(),
     supabase
       .from("uploads")
       .select("id", { count: "exact", head: true })
       .eq("user_id", userId)
       .gte("created_at", since),
+    supabase.from("user_roles").select("role").eq("user_id", userId).eq("role", "admin").maybeSingle(),
   ]);
-  const plan: Plan = (subRes.data?.plan as Plan) ?? "free";
+  const isAdmin = !!adminRes.data;
+  // Admins bypass all plan restrictions — treated as Team/unlimited.
+  const plan: Plan = isAdmin ? "team" : ((subRes.data?.plan as Plan) ?? "free");
   const used = countRes.count ?? 0;
   const limitNum = PLAN_LIMITS[plan];
-  const isUnlimited = !Number.isFinite(limitNum);
+  const isUnlimited = isAdmin || !Number.isFinite(limitNum);
   const limit = isUnlimited ? Number.MAX_SAFE_INTEGER : (limitNum as number);
   const remaining = isUnlimited ? Number.MAX_SAFE_INTEGER : Math.max(0, limit - used);
   return { plan, used, limit, remaining, unlimited: isUnlimited };

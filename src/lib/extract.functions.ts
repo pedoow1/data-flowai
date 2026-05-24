@@ -16,8 +16,8 @@ const RowSchema = z.object({
   total: CellSchema,
 });
 
-const MODEL = "Qwen/Qwen2.5-7B-Instruct-1M";
-const HF_URL = `https://api-inference.huggingface.co/models/${MODEL}/v1/chat/completions`;
+const MODEL = "qwen/qwen-2.5-7b-instruct:free";
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const TIMEOUT_MS = 120_000;
 
 const SYSTEM = `You are a precise document extraction engine. Given raw text from a PDF (invoice, receipt, bill, report, or similar), extract the most likely structured fields and return ONLY valid JSON matching this exact TypeScript type:
@@ -38,16 +38,17 @@ Rules:
 - Currency values should include the currency symbol if present in the text.
 - Dates should be ISO YYYY-MM-DD when possible.`;
 
-async function callHF(apiKey: string, body: unknown): Promise<{ status: number; bodyText: string }> {
+async function callAI(apiKey: string, body: unknown): Promise<{ status: number; bodyText: string }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch(HF_URL, {
+    const res = await fetch(OPENROUTER_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
-        "x-wait-for-model": "true",
+        "HTTP-Referer": "https://data-flowai.lovable.app",
+        "X-Title": "DataFlow AI",
       },
       signal: controller.signal,
       body: JSON.stringify(body),
@@ -62,10 +63,10 @@ async function callHF(apiKey: string, body: unknown): Promise<{ status: number; 
 export const extractFromText = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => InputSchema.parse(data))
   .handler(async ({ data }) => {
-    const apiKey = process.env.HF_API_KEY;
+    const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) {
-      console.error("[extract] Missing HF_API_KEY env var");
-      return { ok: false as const, error: "Server is not configured (missing HF_API_KEY)." };
+      console.error("[extract] Missing OPENROUTER_API_KEY env var");
+      return { ok: false as const, error: "Server is not configured (missing OPENROUTER_API_KEY)." };
     }
     if (data.text.length < 20) {
       return {
@@ -90,7 +91,7 @@ export const extractFromText = createServerFn({ method: "POST" })
     while (attempt < 3) {
       attempt++;
       try {
-        const { status, bodyText } = await callHF(apiKey, requestBody);
+        const { status, bodyText } = await callAI(apiKey, requestBody);
 
         if (status === 200) {
           let json: any;
@@ -116,10 +117,10 @@ export const extractFromText = createServerFn({ method: "POST" })
         }
 
         // Non-200 — log and decide whether to retry
-        console.error(`[extract] HF API ${status}:`, bodyText.slice(0, 400));
+        console.error(`[extract] OpenRouter API ${status}:`, bodyText.slice(0, 400));
 
-        if (status === 503 || status === 524) {
-          lastError = "AI model is warming up.";
+        if (status === 503 || status === 524 || status === 502) {
+          lastError = "AI service is temporarily unavailable.";
           await new Promise((r) => setTimeout(r, 5000 * attempt));
           continue;
         }
@@ -129,7 +130,7 @@ export const extractFromText = createServerFn({ method: "POST" })
           continue;
         }
         if (status === 401 || status === 403) {
-          return { ok: false as const, error: "AI service authentication failed (invalid HF_API_KEY)." };
+          return { ok: false as const, error: "AI service authentication failed (invalid OPENROUTER_API_KEY)." };
         }
         if (status === 404) {
           return { ok: false as const, error: `AI model not found: ${MODEL}.` };
