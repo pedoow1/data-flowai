@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useAuth } from "@/lib/auth";
+import { lovable } from "@/integrations/lovable";
 import { Header } from "@/components/Layout";
 import { PrivacyBadge } from "@/components/Privacy";
 import { Lock, ArrowRight, AlertCircle } from "lucide-react";
