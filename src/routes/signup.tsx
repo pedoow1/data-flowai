@@ -19,6 +19,7 @@ function SignupPage() {
   const [confirm, setConfirm] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [sent, setSent] = useState(false);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,9 +28,16 @@ function SignupPage() {
     setLoading(true);
     const res = await signup(email, password);
     setLoading(false);
-    if (res.ok) nav({ to: "/dashboard" });
+    if (res.ok) setSent(true);
     else setErr(res.error ?? "Sign up failed.");
   };
+
+  const googleSignIn = async () => {
+    setErr(null);
+    const res = await lovable.auth.signInWithOAuth("google", { redirect_uri: window.location.origin + "/dashboard" });
+    if (res.error) setErr(res.error.message || "Google sign-in failed.");
+  };
+
 
   return (
     <div className="min-h-screen flex flex-col">
