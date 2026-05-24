@@ -1,9 +1,10 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useAuth } from "@/lib/auth";
+import { lovable } from "@/integrations/lovable";
 import { Header } from "@/components/Layout";
 import { PrivacyBadge } from "@/components/Privacy";
-import { UserPlus, ArrowRight, AlertCircle } from "lucide-react";
+import { UserPlus, ArrowRight, AlertCircle, MailCheck } from "lucide-react";
 
 export const Route = createFileRoute("/signup")({
   head: () => ({ meta: [{ title: "Create account — DataFlow AI" }] }),
