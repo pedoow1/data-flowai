@@ -38,16 +38,17 @@ Rules:
 - Currency values should include the currency symbol if present in the text.
 - Dates should be ISO YYYY-MM-DD when possible.`;
 
-async function callHF(apiKey: string, body: unknown): Promise<{ status: number; bodyText: string }> {
+async function callAI(apiKey: string, body: unknown): Promise<{ status: number; bodyText: string }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch(HF_URL, {
+    const res = await fetch(OPENROUTER_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
-        "x-wait-for-model": "true",
+        "HTTP-Referer": "https://data-flowai.lovable.app",
+        "X-Title": "DataFlow AI",
       },
       signal: controller.signal,
       body: JSON.stringify(body),
