@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { lovable } from "@/integrations/lovable";
@@ -13,7 +13,6 @@ export const Route = createFileRoute("/signup")({
 
 function SignupPage() {
   const { signup } = useAuth();
-  void useNavigate;
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
