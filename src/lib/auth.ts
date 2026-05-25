@@ -5,45 +5,67 @@ import { ADMIN_EMAIL } from "./config";
 export type LogEntry = { ts: number; type: string; detail: string };
 export function logEvent(_type: string, _detail: string) {}
 
+// Module-level cache so any new Header/component instance starts with the
+// last-known session immediately — no async flash of "Sign in / Sign up".
+let _cachedUserId: string | null = null;
+let _cachedEmail: string | null = null;
+let _cachedIsAdmin: boolean = false;
+
 export function useAuth() {
-  const [email, setEmail] = useState<string | null>(null);
-  const [userId, setUserId] = useState<string | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [email, setEmail] = useState<string | null>(_cachedEmail);
+  const [userId, setUserId] = useState<string | null>(_cachedUserId);
+  const [isAdmin, setIsAdmin] = useState<boolean>(_cachedIsAdmin);
   const [ready, setReady] = useState(false);
 
+  const applyUser = useCallback((u: { id: string; email?: string | null } | null) => {
+    const id = u?.id ?? null;
+    const mail = u?.email ?? null;
+    _cachedUserId = id;
+    _cachedEmail = mail;
+    setUserId(id);
+    setEmail(mail);
+  }, []);
+
   const refreshRole = useCallback(async (uid: string | null, mail: string | null) => {
-    if (!uid) { setIsAdmin(false); return; }
+    if (!uid) { _cachedIsAdmin = false; setIsAdmin(false); return; }
     if (mail && mail.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
-      setIsAdmin(true);
+      _cachedIsAdmin = true; setIsAdmin(true);
       return;
     }
-    const { data } = await supabase
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", uid)
-      .eq("role", "admin")
-      .maybeSingle();
-    setIsAdmin(!!data);
+    try {
+      const { data } = await supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", uid)
+        .eq("role", "admin")
+        .maybeSingle();
+      _cachedIsAdmin = !!data;
+      setIsAdmin(!!data);
+    } catch {
+      // network failure — keep existing admin state, don't block the UI
+    }
   }, []);
 
   useEffect(() => {
+    // Listen for future auth state changes (login / logout / token refresh)
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       const u = session?.user ?? null;
-      setUserId(u?.id ?? null);
-      setEmail(u?.email ?? null);
-      setTimeout(() => { void refreshRole(u?.id ?? null, u?.email ?? null); }, 0);
-    });
-
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      const u = session?.user ?? null;
-      setUserId(u?.id ?? null);
-      setEmail(u?.email ?? null);
-      setReady(true);
+      applyUser(u);
       void refreshRole(u?.id ?? null, u?.email ?? null);
     });
 
+    // Hydrate from the stored session once on mount
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      const u = session?.user ?? null;
+      applyUser(u);
+      setReady(true);
+      void refreshRole(u?.id ?? null, u?.email ?? null);
+    }).catch(() => {
+      setReady(true);
+    });
+
     return () => subscription.unsubscribe();
-  }, [refreshRole]);
+  }, [applyUser, refreshRole]);
 
   const signup = useCallback(async (e: string, password: string): Promise<{ ok: boolean; error?: string }> => {
     const normalized = e.trim().toLowerCase();
@@ -71,6 +93,9 @@ export function useAuth() {
   }, []);
 
   const logout = useCallback(async () => {
+    _cachedUserId = null;
+    _cachedEmail = null;
+    _cachedIsAdmin = false;
     await supabase.auth.signOut();
   }, []);
 
