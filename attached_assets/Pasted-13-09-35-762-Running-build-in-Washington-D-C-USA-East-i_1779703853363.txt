@@ -1,0 +1,116 @@
+13:09:35.762 Running build in Washington, D.C., USA (East) – iad1
+13:09:35.763 Build machine configuration: 2 cores, 8 GB
+13:09:35.893 Cloning github.com/pedoow1/data-flowai (Branch: main, Commit: ba893d0)
+13:09:35.894 Previous build caches not available.
+13:09:36.301 Cloning completed: 408.000ms
+13:09:36.577 Running "vercel build"
+13:09:36.638 Vercel CLI 54.4.1
+13:09:37.332 Running "install" command: `npm install`...
+13:09:40.004 npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+13:09:48.607 npm warn deprecated recharts@2.15.4: 1.x and 2.x branches are no longer active. Bump to Recharts v3 to receive latest features and bugfixes. See https://github.com/recharts/recharts/wiki/3.0-migration-guide
+13:09:54.716 
+13:09:54.717 added 581 packages, and audited 582 packages in 17s
+13:09:54.717 
+13:09:54.717 129 packages are looking for funding
+13:09:54.718   run `npm fund` for details
+13:09:54.724 
+13:09:54.724 1 high severity vulnerability
+13:09:54.724 
+13:09:54.724 Some issues need review, and may require choosing
+13:09:54.725 a different dependency.
+13:09:54.725 
+13:09:54.725 Run `npm audit` for details.
+13:09:56.551 
+13:09:56.552 > build
+13:09:56.552 > vite build
+13:09:56.552 
+13:09:59.104 vite v7.3.3 building client environment for production...
+13:09:59.153 transforming...
+13:10:00.846 Found 1 warning while optimizing generated CSS:
+13:10:00.846 
+13:10:00.847 │   initial-value: 0;
+13:10:00.847 │ }
+13:10:00.847 │ @import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap");
+13:10:00.848 ┆        ^-- @import rules must precede all rules aside from @charset and @layer statements
+13:10:00.848 ┆
+13:10:00.848 │ :root {
+13:10:00.848 │   --radius: 0.75rem;
+13:10:00.849 
+13:10:05.635 ✓ 1996 modules transformed.
+13:10:06.037 rendering chunks...
+13:10:06.585 computing gzip size...
+13:10:06.688 dist/client/assets/pdf.worker.min-iDqQPrd3.mjs  1,232.30 kB
+13:10:06.689 dist/client/assets/styles-C2scqXz9.css             88.37 kB │ gzip:  14.41 kB
+13:10:06.689 dist/client/assets/check-D4ad2hLk.js                0.12 kB │ gzip:   0.14 kB
+13:10:06.689 dist/client/assets/arrow-right-Dpwdo9Ja.js          0.17 kB │ gzip:   0.16 kB
+13:10:06.689 dist/client/assets/lock-CxOYWOf_.js                 0.20 kB │ gzip:   0.19 kB
+13:10:06.689 dist/client/assets/circle-alert-BZ34ISMc.js         0.25 kB │ gzip:   0.19 kB
+13:10:06.689 dist/client/assets/file-text-BXymcVei.js            0.39 kB │ gzip:   0.25 kB
+13:10:06.690 dist/client/assets/zap-N7ZuY8zj.js                  0.84 kB │ gzip:   0.43 kB
+13:10:06.690 dist/client/assets/Privacy-6fP3d8Qx.js              2.51 kB │ gzip:   1.17 kB
+13:10:06.690 dist/client/assets/pricing-ByWzqce9.js              2.99 kB │ gzip:   1.27 kB
+13:10:06.690 dist/client/assets/privacy-ByX_yqdH.js              3.18 kB │ gzip:   1.24 kB
+13:10:06.690 dist/client/assets/terms-BceR5zyv.js                3.29 kB │ gzip:   1.23 kB
+13:10:06.690 dist/client/assets/index-2WGAZ_PS.js                3.48 kB │ gzip:   1.67 kB
+13:10:06.691 dist/client/assets/login-C3xoxPer.js                4.05 kB │ gzip:   1.78 kB
+13:10:06.691 dist/client/assets/auth-middleware-BY-ViUTX.js      4.71 kB │ gzip:   2.06 kB
+13:10:06.692 dist/client/assets/signup-CPdAG2W_.js               5.59 kB │ gzip:   2.26 kB
+13:10:06.692 dist/client/assets/Layout-Cprdvexw.js               6.83 kB │ gzip:   2.77 kB
+13:10:06.692 dist/client/assets/index-D0cGirRc.js                7.79 kB │ gzip:   2.47 kB
+13:10:06.692 dist/client/assets/admin-DLQdVFQD.js               14.26 kB │ gzip:   5.20 kB
+13:10:06.692 dist/client/assets/xlsx-CNerDvZX.js               429.19 kB │ gzip: 142.94 kB
+13:10:06.693 dist/client/assets/dashboard-CO4O7Smg.js          442.03 kB │ gzip: 132.17 kB
+13:10:06.693 dist/client/assets/index-UTwcM83V.js              786.98 kB │ gzip: 239.85 kB
+13:10:06.693 
+13:10:06.693 (!) Some chunks are larger than 500 kB after minification. Consider:
+13:10:06.693 - Using dynamic import() to code-split the application
+13:10:06.693 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+13:10:06.694 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+13:10:06.694 ✓ built in 7.56s
+13:10:06.694 vite v7.3.3 building ssr environment for production...
+13:10:06.707 transforming...
+13:10:07.444 Found 1 warning while optimizing generated CSS:
+13:10:07.444 
+13:10:07.444 │   initial-value: 0;
+13:10:07.444 │ }
+13:10:07.445 │ @import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap");
+13:10:07.445 ┆        ^-- @import rules must precede all rules aside from @charset and @layer statements
+13:10:07.445 ┆
+13:10:07.445 │ :root {
+13:10:07.445 │   --radius: 0.75rem;
+13:10:07.445 
+13:10:07.631 "createRequestHandler", "defineHandlerCallback", "transformPipeableStreamWithRouter" and "transformReadableStreamWithRouter" are imported from external module "@tanstack/router-core/ssr/server" but never used in "node_modules/@tanstack/start-server-core/dist/esm/index.js".
+13:10:07.632 "RawStream" is imported from external module "@tanstack/router-core" but never used in "node_modules/@tanstack/start-client-core/dist/esm/index.js".
+13:10:07.632 "json" is imported from external module "@tanstack/router-core/ssr/client" but never used in "node_modules/@tanstack/start-client-core/dist/esm/index.js".
+13:10:07.632 ✓ 109 modules transformed.
+13:10:07.674 rendering chunks...
+13:10:07.718 dist/server/assets/__23tanstack-start-plugin-adapters-Cwee5PKy.js   0.14 kB
+13:10:07.719 dist/server/assets/createServerRpc-CdhLptsC.js                      0.31 kB
+13:10:07.719 dist/server/assets/config-Bsm1PXvL.js                               0.48 kB
+13:10:07.720 dist/server/assets/index-CychnZZd.js                                0.77 kB
+13:10:07.720 dist/server/assets/client-BqWONuOE.js                               0.84 kB
+13:10:07.720 dist/server/assets/createSsrRpc-DsWhyqEa.js                         1.01 kB
+13:10:07.720 dist/server/assets/client.server-U_pH-Evd.js                        1.05 kB
+13:10:07.720 dist/server/assets/auth-middleware-CKZJyiaJ.js                      2.11 kB
+13:10:07.721 dist/server/assets/start-DX6H46kD.js                                2.14 kB
+13:10:07.721 dist/server/assets/_tanstack-start-manifest_v-jFyjo6-a.js           2.41 kB
+13:10:07.721 dist/server/assets/support.functions-BlXwJLFc.js                    2.84 kB
+13:10:07.721 dist/server/assets/Privacy-BUjbT4je.js                              2.89 kB
+13:10:07.721 dist/server/assets/usage.functions-Bl-rn5IA.js                      3.31 kB
+13:10:07.722 dist/server/assets/admin.functions-Gs2mq6_6.js                      3.44 kB
+13:10:07.722 dist/server/server.js                                               3.86 kB
+13:10:07.722 dist/server/assets/pricing-BVS8sSyS.js                              4.24 kB
+13:10:07.722 dist/server/assets/privacy-BC2Qnp3Z.js                              4.40 kB
+13:10:07.722 dist/server/assets/terms-BnbYhoti.js                                4.51 kB
+13:10:07.723 dist/server/assets/login-Cz9tF7kB.js                                5.80 kB
+13:10:07.723 dist/server/assets/extract.functions-xlp0h2Y4.js                    6.31 kB
+13:10:07.723 dist/server/assets/Layout-Dj5qrJB2.js                               7.22 kB
+13:10:07.723 dist/server/assets/signup-DDNkckQx.js                               7.40 kB
+13:10:07.723 dist/server/assets/admin-CibJYuuE.js                                8.00 kB
+13:10:07.723 dist/server/assets/index-BfJyeYp1.js                               10.55 kB
+13:10:07.724 dist/server/assets/router-z-DGvHj_.js                              13.97 kB
+13:10:07.724 dist/server/assets/dashboard-ex94tJ5w.js                           39.26 kB
+13:10:07.724 dist/server/assets/server-4l7tU4rx.js                              64.95 kB
+13:10:07.724 ✓ built in 1.02s
+13:10:07.816 Error: No Output Directory named "npm run build" found after the Build completed. Update vercel.json#outputDirectory to ensure the correct output directory is generated.
+13:10:07.817 Learn More: https://vercel.link/missing-public-directory
