@@ -1,0 +1,123 @@
+12:49:30.859 Running build in Washington, D.C., USA (East) – iad1
+12:49:30.860 Build machine configuration: 2 cores, 8 GB
+12:49:30.874 Cloning github.com/pedoow1/data-flowai (Branch: main, Commit: 6f9aaf4)
+12:49:30.875 Skipping build cache, deployment was triggered without cache.
+12:49:31.234 Cloning completed: 360.000ms
+12:49:31.506 Running "vercel build"
+12:49:31.525 Vercel CLI 54.4.1
+12:49:32.033 Installing dependencies...
+12:49:35.182 npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+12:49:43.643 npm warn deprecated recharts@2.15.4: 1.x and 2.x branches are no longer active. Bump to Recharts v3 to receive latest features and bugfixes. See https://github.com/recharts/recharts/wiki/3.0-migration-guide
+12:49:49.696 
+12:49:49.696 added 575 packages in 18s
+12:49:49.697 
+12:49:49.697 125 packages are looking for funding
+12:49:49.697   run `npm fund` for details
+12:49:50.125 
+12:49:50.126 > build
+12:49:50.126 > vite build
+12:49:50.126 
+12:49:53.969 vite v7.3.3 building client environment for production...
+12:49:54.024 transforming...
+12:49:55.830 Found 1 warning while optimizing generated CSS:
+12:49:55.830 
+12:49:55.830 │   initial-value: 0;
+12:49:55.830 │ }
+12:49:55.831 │ @import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap");
+12:49:55.831 ┆        ^-- @import rules must precede all rules aside from @charset and @layer statements
+12:49:55.831 ┆
+12:49:55.831 │ :root {
+12:49:55.831 │   --radius: 0.75rem;
+12:49:55.831 
+12:50:00.814 ✓ 1996 modules transformed.
+12:50:01.292 rendering chunks...
+12:50:01.859 computing gzip size...
+12:50:01.908 dist/client/.assetsignore                           0.02 kB
+12:50:01.909 dist/client/assets/pdf.worker.min-iDqQPrd3.mjs  1,232.30 kB
+12:50:01.910 dist/client/assets/styles-C2scqXz9.css             88.37 kB │ gzip:  14.41 kB
+12:50:01.910 dist/client/assets/check-D4ad2hLk.js                0.12 kB │ gzip:   0.14 kB
+12:50:01.910 dist/client/assets/arrow-right-Dpwdo9Ja.js          0.17 kB │ gzip:   0.16 kB
+12:50:01.910 dist/client/assets/lock-CxOYWOf_.js                 0.20 kB │ gzip:   0.19 kB
+12:50:01.910 dist/client/assets/circle-alert-BZ34ISMc.js         0.25 kB │ gzip:   0.19 kB
+12:50:01.910 dist/client/assets/file-text-BXymcVei.js            0.39 kB │ gzip:   0.25 kB
+12:50:01.910 dist/client/assets/zap-N7ZuY8zj.js                  0.84 kB │ gzip:   0.43 kB
+12:50:01.911 dist/client/assets/Privacy-6fP3d8Qx.js              2.51 kB │ gzip:   1.17 kB
+12:50:01.911 dist/client/assets/pricing-ByWzqce9.js              2.99 kB │ gzip:   1.27 kB
+12:50:01.911 dist/client/assets/privacy-ByX_yqdH.js              3.18 kB │ gzip:   1.24 kB
+12:50:01.911 dist/client/assets/terms-BceR5zyv.js                3.29 kB │ gzip:   1.23 kB
+12:50:01.911 dist/client/assets/index-2WGAZ_PS.js                3.48 kB │ gzip:   1.67 kB
+12:50:01.911 dist/client/assets/login-C3xoxPer.js                4.05 kB │ gzip:   1.78 kB
+12:50:01.911 dist/client/assets/auth-middleware-BY-ViUTX.js      4.71 kB │ gzip:   2.06 kB
+12:50:01.913 dist/client/assets/signup-CPdAG2W_.js               5.59 kB │ gzip:   2.26 kB
+12:50:01.913 dist/client/assets/Layout-Cprdvexw.js               6.83 kB │ gzip:   2.77 kB
+12:50:01.913 dist/client/assets/index-D0cGirRc.js                7.79 kB │ gzip:   2.47 kB
+12:50:01.913 dist/client/assets/admin-DLQdVFQD.js               14.26 kB │ gzip:   5.20 kB
+12:50:01.913 dist/client/assets/xlsx-CNerDvZX.js               429.19 kB │ gzip: 142.94 kB
+12:50:01.913 dist/client/assets/dashboard-CO4O7Smg.js          442.03 kB │ gzip: 132.17 kB
+12:50:01.914 dist/client/assets/index-UTwcM83V.js              786.98 kB │ gzip: 239.85 kB
+12:50:01.914 
+12:50:01.914 (!) Some chunks are larger than 500 kB after minification. Consider:
+12:50:01.914 - Using dynamic import() to code-split the application
+12:50:01.914 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+12:50:01.914 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+12:50:01.914 ✓ built in 7.91s
+12:50:01.914 vite v7.3.3 building ssr environment for production...
+12:50:01.924 transforming...
+12:50:04.061 Found 1 warning while optimizing generated CSS:
+12:50:04.062 
+12:50:04.063 │   initial-value: 0;
+12:50:04.063 │ }
+12:50:04.063 │ @import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap");
+12:50:04.063 ┆        ^-- @import rules must precede all rules aside from @charset and @layer statements
+12:50:04.063 ┆
+12:50:04.063 │ :root {
+12:50:04.063 │   --radius: 0.75rem;
+12:50:04.064 
+12:50:08.566 ✓ 2062 modules transformed.
+12:50:08.864 rendering chunks...
+12:50:09.448 Using secrets defined in .env
+12:50:10.180 dist/server/.dev.vars                                                  0.64 kB
+12:50:10.192 dist/server/wrangler.json                                              1.21 kB
+12:50:10.193 dist/server/.vite/manifest.json                                       11.63 kB
+12:50:10.193 dist/server/assets/pdf.worker.min-iDqQPrd3.mjs                     1,232.30 kB
+12:50:10.193 dist/server/assets/styles-C2scqXz9.css                                88.37 kB
+12:50:10.194 dist/server/index.js                                                   0.10 kB
+12:50:10.194 dist/server/assets/__23tanstack-start-plugin-adapters-Cwee5PKy.js      0.14 kB
+12:50:10.194 dist/server/assets/check-m8cmVaFL.js                                   0.21 kB
+12:50:10.195 dist/server/assets/arrow-right-D9QEB3BC.js                             0.28 kB
+12:50:10.195 dist/server/assets/createServerRpc-D6vEAjI1.js                         0.31 kB
+12:50:10.195 dist/server/assets/lock-B_doYRYX.js                                    0.32 kB
+12:50:10.196 dist/server/assets/circle-alert-DTZM0Adx.js                            0.39 kB
+12:50:10.196 dist/server/assets/config-Bsm1PXvL.js                                  0.48 kB
+12:50:10.196 dist/server/assets/file-text-BYRfdW5M.js                               0.55 kB
+12:50:10.197 dist/server/assets/client-BGQ0ud_O.js                                  0.84 kB
+12:50:10.197 dist/server/assets/client.server-CMDbe_Bd.js                           1.05 kB
+12:50:10.197 dist/server/assets/zap-BqVF7DCA.js                                     1.17 kB
+12:50:10.198 dist/server/assets/createSsrRpc-DAsI4RPz.js                            1.21 kB
+12:50:10.198 dist/server/assets/start-Bb_daY8T.js                                   1.92 kB
+12:50:10.198 dist/server/assets/auth-middleware-Dn6QG5Cd.js                         2.11 kB
+12:50:10.199 dist/server/assets/_tanstack-start-manifest_v-jFyjo6-a.js              2.41 kB
+12:50:10.199 dist/server/assets/support.functions-V-ugZrfx.js                       2.66 kB
+12:50:10.203 dist/server/assets/usage.functions-Ba9BF59c.js                         3.10 kB
+12:50:10.204 dist/server/assets/admin.functions-DXCaHAcs.js                         3.18 kB
+12:50:10.204 dist/server/assets/Privacy-DXgqi7L9.js                                 3.73 kB
+12:50:10.205 dist/server/assets/pricing-DpkOVNyr.js                                 4.80 kB
+12:50:10.205 dist/server/assets/privacy-DkFurTMW.js                                 5.05 kB
+12:50:10.206 dist/server/assets/terms-wbkOP0lR.js                                   5.16 kB
+12:50:10.206 dist/server/assets/extract.functions-CotS0ac0.js                       6.14 kB
+12:50:10.206 dist/server/assets/login-C4A_oFwp.js                                   6.59 kB
+12:50:10.207 dist/server/assets/index-DA6J9dqg.js                                   7.09 kB
+12:50:10.208 dist/server/assets/signup-DMB8WIj6.js                                  9.03 kB
+12:50:10.209 dist/server/assets/Layout-4v6_hiqA.js                                 11.10 kB
+12:50:10.209 dist/server/assets/index-57yNBGyN.js                                  12.48 kB
+12:50:10.211 dist/server/assets/worker-entry-BvUu0jHI.js                           21.31 kB
+12:50:10.211 dist/server/assets/admin-B2-zFCvm.js                                  31.28 kB
+12:50:10.211 dist/server/assets/types-DUdIj-VQ.js                                 105.95 kB
+12:50:10.212 dist/server/assets/router-CaP0UZCY.js                                492.23 kB
+12:50:10.212 dist/server/assets/index-DdGN5IVl.js                                 713.96 kB
+12:50:10.212 dist/server/assets/server-veZO6019.js                                745.56 kB
+12:50:10.212 dist/server/assets/dashboard-DwddTAfQ.js                             852.17 kB
+12:50:10.212 dist/server/assets/xlsx-D6h3nj8f.js                                  866.44 kB
+12:50:10.213 ✓ built in 8.30s
+12:50:10.416 Error: No Output Directory named "output" found after the Build completed. Update vercel.json#outputDirectory to ensure the correct output directory is generated.
+12:50:10.416 Learn More: https://vercel.link/missing-public-directory
