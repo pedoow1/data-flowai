@@ -1,36 +1,23 @@
-// Admin-only server fns. Uses the authenticated user's Supabase client,
-// which has full read access via "admins read all X" RLS policies.
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { ADMIN_EMAIL } from "./config";
 
-async function assertAdmin(supabase: any, userId: string) {
-  // Fast path: check claims email against known admin
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("email")
-    .eq("id", userId)
-    .maybeSingle();
-
-  if (profile?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase()) return;
-
-  const { data } = await supabase
-    .from("user_roles")
-    .select("role")
-    .eq("user_id", userId)
-    .eq("role", "admin")
-    .maybeSingle();
-  if (!data) throw new Error("Forbidden");
+function assertAdmin(claimsEmail: string | undefined) {
+  if (!claimsEmail || claimsEmail.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+    throw new Error("Forbidden");
+  }
 }
 
 export const getAdminStats = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
-    const { supabase, userId } = context;
-    await assertAdmin(supabase, userId);
+    const { supabase, claims } = context;
+
+    // Email comes directly from the verified JWT — no DB query needed
+    assertAdmin(claims.email as string | undefined);
 
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const since7d  = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
     const [users, uploads24h, uploads7d, tickets, subs] = await Promise.all([
       supabase.from("profiles").select("id, email, created_at").order("created_at", { ascending: false }),
@@ -55,7 +42,7 @@ export const getAdminStats = createServerFn({ method: "GET" })
     }
     for (const d of days) d.count = dayMap[d.day] ?? 0;
 
-    // Top users (24h)
+    // Top users in last 24h
     const sinceMs = Date.now() - 24 * 60 * 60 * 1000;
     const perUser: Record<string, number> = {};
     for (const u of uploads7d.data ?? []) {
@@ -74,11 +61,11 @@ export const getAdminStats = createServerFn({ method: "GET" })
     for (const s of subs.data ?? []) planCounts[s.plan as string] = (planCounts[s.plan as string] ?? 0) + 1;
 
     return {
-      totalUsers: users.data?.length ?? 0,
+      totalUsers:   users.data?.length ?? 0,
       uploadsToday: uploads24h.count ?? 0,
       uploadsByDay: days,
       topUsers,
-      tickets: tickets.data ?? [],
+      tickets:      tickets.data ?? [],
       planCounts,
     };
   });
