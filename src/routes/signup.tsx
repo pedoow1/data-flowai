@@ -18,9 +18,9 @@ function SignupPage() {
     if (ready && isAuthed) nav({ to: "/dashboard" });
   }, [ready, isAuthed, nav]);
 
-  const loginUrl = typeof window !== "undefined"
-    ? `https://replit.com/auth_with_repl_site?domain=${window.location.host}`
-    : "/login";
+  const handleLogin = () => {
+    window.location.href = `https://replit.com/auth_with_repl_site?domain=${window.location.host}`;
+  };
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -37,12 +37,12 @@ function SignupPage() {
             Sign in with Replit to get started. No credit card required.
           </p>
           <div className="mt-6">
-            <a
-              href={loginUrl}
+            <button
+              onClick={handleLogin}
               className="w-full inline-flex items-center justify-center gap-2 bg-lime text-primary-foreground font-semibold py-3 rounded-lg hover:opacity-90 transition"
             >
               Get started <ArrowRight className="h-4 w-4" />
-            </a>
+            </button>
           </div>
           <p className="mt-6 text-xs text-muted-foreground text-center">
             Already have an account?{" "}

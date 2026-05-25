@@ -18,9 +18,9 @@ function LoginPage() {
     if (ready && isAuthed) nav({ to: "/dashboard" });
   }, [ready, isAuthed, nav]);
 
-  const loginUrl = typeof window !== "undefined"
-    ? `https://replit.com/auth_with_repl_site?domain=${window.location.host}`
-    : "/login";
+  const handleLogin = () => {
+    window.location.href = `https://replit.com/auth_with_repl_site?domain=${window.location.host}`;
+  };
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -35,12 +35,12 @@ function LoginPage() {
           <h1 className="text-2xl font-bold tracking-tight">Sign in to DataFlow</h1>
           <p className="text-sm text-muted-foreground mt-1.5">Welcome back. Click below to sign in securely.</p>
           <div className="mt-6">
-            <a
-              href={loginUrl}
+            <button
+              onClick={handleLogin}
               className="w-full inline-flex items-center justify-center gap-2 bg-lime text-primary-foreground font-semibold py-3 rounded-lg hover:opacity-90 transition"
             >
               Continue <ArrowRight className="h-4 w-4" />
-            </a>
+            </button>
           </div>
           <p className="mt-6 text-xs text-muted-foreground text-center">
             New to DataFlow?{" "}
