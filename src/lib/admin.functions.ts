@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { createClient } from "@supabase/supabase-js";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { ADMIN_EMAIL } from "./config";
 
@@ -9,13 +10,22 @@ function assertAdmin(claimsEmail: string | undefined) {
   }
 }
 
+function getServiceClient() {
+  const url = process.env.SUPABASE_URL!;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  if (!url || !key) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
+  return createClient(url, key, {
+    auth: { storage: undefined, persistSession: false, autoRefreshToken: false },
+  });
+}
+
 export const getAdminStats = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
-    const { supabase, claims } = context;
-
+    const { claims } = context;
     assertAdmin(claims.email as string | undefined);
 
+    const supabase = getServiceClient();
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const since7d  = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -80,9 +90,10 @@ export type AdminUser = {
 export const getAdminUsers = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }): Promise<AdminUser[]> => {
-    const { supabase, claims } = context;
+    const { claims } = context;
     assertAdmin(claims.email as string | undefined);
 
+    const supabase = getServiceClient();
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
     const [profilesRes, subsRes, uploadsRes] = await Promise.all([
@@ -117,9 +128,10 @@ export const setUserPlan = createServerFn({ method: "POST" })
     z.object({ userId: z.string().uuid(), plan: z.enum(["free", "pro", "team"]) }).parse(d)
   )
   .handler(async ({ context, data }) => {
-    const { supabase, claims } = context;
+    const { claims } = context;
     assertAdmin(claims.email as string | undefined);
 
+    const supabase = getServiceClient();
     const { error } = await supabase
       .from("subscriptions")
       .upsert(

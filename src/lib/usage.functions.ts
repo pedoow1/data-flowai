@@ -2,8 +2,18 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { PLAN_LIMITS, ADMIN_EMAIL, type Plan } from "./config";
+import { createClient } from "@supabase/supabase-js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+function getServiceClient() {
+  const url = process.env.SUPABASE_URL!;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  if (!url || !key) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
+  return createClient(url, key, {
+    auth: { storage: undefined, persistSession: false, autoRefreshToken: false },
+  });
+}
 
 async function getPlanAndUsage(supabase: any, userId: string, isAdminOverride = false) {
   const since = new Date(Date.now() - DAY_MS).toISOString();
@@ -17,7 +27,6 @@ async function getPlanAndUsage(supabase: any, userId: string, isAdminOverride = 
     supabase.from("user_roles").select("role").eq("user_id", userId).eq("role", "admin").maybeSingle(),
   ]);
   const isAdmin = isAdminOverride || !!adminRes.data;
-  // Admin uses their actual DB plan (so they can switch), but always stay unlimited
   const plan: Plan = (subRes.data?.plan as Plan) ?? "free";
   const used = countRes.count ?? 0;
   const limitNum = PLAN_LIMITS[plan];
@@ -59,15 +68,19 @@ export const setAdminPlan = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => z.object({ plan: z.enum(["free", "pro", "team"]) }).parse(d))
   .handler(async ({ context, data }) => {
-    const { supabase, userId, claims } = context;
+    const { userId, claims } = context;
     const isAdminEmail =
       typeof claims?.email === "string" &&
       claims.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
     if (!isAdminEmail) throw new Error("Forbidden");
-    const { error } = await supabase
+
+    const admin = getServiceClient();
+    const { error } = await admin
       .from("subscriptions")
-      .update({ plan: data.plan, updated_at: new Date().toISOString() })
-      .eq("user_id", userId);
+      .upsert(
+        { user_id: userId, plan: data.plan, status: "active", updated_at: new Date().toISOString() },
+        { onConflict: "user_id" }
+      );
     if (error) return { ok: false as const, error: error.message };
     return { ok: true as const };
   });
