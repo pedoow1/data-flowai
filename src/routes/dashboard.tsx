@@ -12,7 +12,7 @@ import { HelpButton } from "@/components/HelpButton";
 import { useAuth } from "@/lib/auth";
 import { extractFromText, extractFromImage } from "@/lib/extract.functions";
 import { extractPdfText, pdfPageToImageDataUrl, imageFileToDataUrl } from "@/lib/pdf";
-import { getMyUsage, recordUpload } from "@/lib/usage.functions";
+import { getMyUsage, recordUpload, setAdminPlan } from "@/lib/usage.functions";
 import { exportJSON, exportCSV, exportXLSX } from "@/lib/exporters";
 import { track, identify } from "@/lib/analytics";
 import { History, Settings, Gauge, Zap, Sparkles, Trash2, FileText, AlertTriangle, Infinity as InfinityIcon } from "lucide-react";
@@ -25,7 +25,7 @@ export const Route = createFileRoute("/dashboard")({
 type Tab = "extract" | "history" | "settings";
 const HISTORY_KEY = "dataflow_history";
 
-type Usage = { plan: "free" | "pro" | "team"; used: number; limit: number; remaining: number; unlimited: boolean };
+type Usage = { plan: "free" | "pro" | "team"; used: number; limit: number; remaining: number; unlimited: boolean; isAdmin?: boolean };
 
 function loadHistory(): ExtractedRow[] {
   try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); } catch { return []; }
@@ -44,10 +44,11 @@ function Dashboard() {
   const [tab, setTab] = useState<Tab>("extract");
   const [usage, setUsage] = useState<Usage>({ plan: "free", used: 0, limit: 2, remaining: 2, unlimited: false });
   const [lastFile, setLastFile] = useState<File | null>(null);
-  const extract      = useServerFn(extractFromText);
+  const extract       = useServerFn(extractFromText);
   const extractVision = useServerFn(extractFromImage);
-  const fetchUsage   = useServerFn(getMyUsage);
-  const logUpload    = useServerFn(recordUpload);
+  const fetchUsage    = useServerFn(getMyUsage);
+  const logUpload     = useServerFn(recordUpload);
+  const changePlan    = useServerFn(setAdminPlan);
 
   const refreshUsage = useCallback(async () => {
     try {
@@ -225,7 +226,16 @@ function Dashboard() {
             )}
 
             {tab === "settings" && (
-              <SettingsView email={email} isAdmin={isAdmin} usage={usage} onUpgrade={() => setUpgrade(true)} />
+              <SettingsView
+                email={email}
+                isAdmin={isAdmin}
+                usage={usage}
+                onUpgrade={() => setUpgrade(true)}
+                onPlanChange={async (plan) => {
+                  await changePlan({ data: { plan } });
+                  await refreshUsage();
+                }}
+              />
             )}
           </div>
         </div>
@@ -332,9 +342,25 @@ function HistoryView({ history, onClear, onExport }: {
   );
 }
 
-function SettingsView({ email, isAdmin, usage, onUpgrade }: {
+function SettingsView({ email, isAdmin, usage, onUpgrade, onPlanChange }: {
   email: string | null; isAdmin: boolean; usage: Usage; onUpgrade: () => void;
+  onPlanChange?: (plan: "free" | "pro" | "team") => Promise<void>;
 }) {
+  const [changingPlan, setChangingPlan] = useState(false);
+
+  const handlePlanChange = async (plan: "free" | "pro" | "team") => {
+    if (!onPlanChange || plan === usage.plan) return;
+    setChangingPlan(true);
+    try {
+      await onPlanChange(plan);
+      toast.success(`Plan switched to ${plan.toUpperCase()}`);
+    } catch {
+      toast.error("Failed to switch plan");
+    } finally {
+      setChangingPlan(false);
+    }
+  };
+
   return (
     <>
       <div className="mb-6">
@@ -348,11 +374,33 @@ function SettingsView({ email, isAdmin, usage, onUpgrade }: {
           <Row label="Plan" value={usage.plan.toUpperCase()} />
         </Card>
 
+        {isAdmin && (
+          <Card title="Admin — Switch Plan">
+            <p className="text-xs text-muted-foreground mb-3">Switch your active plan (you stay unlimited regardless).</p>
+            <div className="flex gap-2">
+              {(["free", "pro", "team"] as const).map((p) => (
+                <button
+                  key={p}
+                  disabled={changingPlan || p === usage.plan}
+                  onClick={() => handlePlanChange(p)}
+                  className={`flex-1 py-2 rounded-lg text-xs font-semibold border transition disabled:opacity-50 ${
+                    p === usage.plan
+                      ? "bg-lime text-primary-foreground border-lime"
+                      : "bg-transparent border-border text-muted-foreground hover:text-foreground hover:border-foreground/40"
+                  }`}
+                >
+                  {p.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          </Card>
+        )}
+
         <Card title="Usage (last 24 hours)">
           <Row label="Uploads used" value={String(usage.used)} />
           <Row label="Remaining" value={usage.unlimited ? "Unlimited" : String(usage.remaining)} />
           <Row label="Daily limit" value={usage.unlimited ? "Unlimited" : String(usage.limit)} />
-          {usage.plan !== "team" && (
+          {!isAdmin && usage.plan !== "team" && (
             <button onClick={onUpgrade} className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold bg-lime text-primary-foreground px-3 py-1.5 rounded-lg hover:opacity-90">
               <Zap className="h-3.5 w-3.5" /> Upgrade for higher limits
             </button>

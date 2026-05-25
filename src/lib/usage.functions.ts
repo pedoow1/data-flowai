@@ -17,13 +17,14 @@ async function getPlanAndUsage(supabase: any, userId: string, isAdminOverride = 
     supabase.from("user_roles").select("role").eq("user_id", userId).eq("role", "admin").maybeSingle(),
   ]);
   const isAdmin = isAdminOverride || !!adminRes.data;
-  const plan: Plan = isAdmin ? "team" : ((subRes.data?.plan as Plan) ?? "free");
+  // Admin uses their actual DB plan (so they can switch), but always stay unlimited
+  const plan: Plan = (subRes.data?.plan as Plan) ?? "free";
   const used = countRes.count ?? 0;
   const limitNum = PLAN_LIMITS[plan];
   const isUnlimited = isAdmin || !Number.isFinite(limitNum);
   const limit = isUnlimited ? Number.MAX_SAFE_INTEGER : (limitNum as number);
   const remaining = isUnlimited ? Number.MAX_SAFE_INTEGER : Math.max(0, limit - used);
-  return { plan, used, limit, remaining, unlimited: isUnlimited };
+  return { plan, used, limit, remaining, unlimited: isUnlimited, isAdmin };
 }
 
 export const getMyUsage = createServerFn({ method: "GET" })
@@ -52,4 +53,21 @@ export const recordUpload = createServerFn({ method: "POST" })
     if (error) return { ok: false as const, error: error.message, usage };
     const after = await getPlanAndUsage(supabase, userId, isAdminEmail);
     return { ok: true as const, usage: after };
+  });
+
+export const setAdminPlan = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: unknown) => z.object({ plan: z.enum(["free", "pro", "team"]) }).parse(d))
+  .handler(async ({ context, data }) => {
+    const { supabase, userId, claims } = context;
+    const isAdminEmail =
+      typeof claims?.email === "string" &&
+      claims.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+    if (!isAdminEmail) throw new Error("Forbidden");
+    const { error } = await supabase
+      .from("subscriptions")
+      .update({ plan: data.plan, updated_at: new Date().toISOString() })
+      .eq("user_id", userId);
+    if (error) return { ok: false as const, error: error.message };
+    return { ok: true as const };
   });
