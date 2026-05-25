@@ -1,150 +1,206 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
-const InputSchema = z.object({
-  text: z.string().min(1).max(120_000),
+// ── Groq configuration ──────────────────────────────────────────────────────
+const TEXT_MODEL   = "llama-3.3-70b";
+const VISION_MODEL = "llama-4-scout";
+const GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions";
+const TIMEOUT_MS   = 120_000;
+
+// ── Shared schemas ───────────────────────────────────────────────────────────
+const CellSchema = z.object({ v: z.string(), c: z.number().min(0).max(100) });
+export const RowSchema = z.object({
+  invoiceNumber: CellSchema,
+  client:        CellSchema,
+  date:          CellSchema,
+  amount:        CellSchema,
+  tax:           CellSchema,
+  total:         CellSchema,
+});
+
+const TextInputSchema = z.object({
+  text:     z.string().min(1).max(120_000),
   fileName: z.string().min(1).max(255),
 });
 
-const CellSchema = z.object({ v: z.string(), c: z.number().min(0).max(100) });
-const RowSchema = z.object({
-  invoiceNumber: CellSchema,
-  client: CellSchema,
-  date: CellSchema,
-  amount: CellSchema,
-  tax: CellSchema,
-  total: CellSchema,
+const ImageInputSchema = z.object({
+  imageDataUrl: z.string().min(50).max(6_000_000), // base64 data URL, max ~4.5 MB decoded
+  fileName:     z.string().min(1).max(255),
 });
 
-const MODEL = "qwen/qwen3-coder:free";
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const TIMEOUT_MS = 120_000;
-
-const SYSTEM = `You are a precise document extraction engine. Given raw text from a PDF (invoice, receipt, bill, report, or similar), extract the most likely structured fields and return ONLY valid JSON matching this exact TypeScript type:
+// ── System / user prompts ────────────────────────────────────────────────────
+const SYSTEM_PROMPT = `You are a precise document extraction engine.
+Given document content (text or image), extract the most likely structured fields and return ONLY valid JSON matching this exact TypeScript type:
 
 type Row = {
   invoiceNumber: { v: string; c: number };
-  client: { v: string; c: number };
-  date: { v: string; c: number };
-  amount: { v: string; c: number };
-  tax: { v: string; c: number };
-  total: { v: string; c: number };
+  client:        { v: string; c: number };
+  date:          { v: string; c: number };
+  amount:        { v: string; c: number };
+  tax:           { v: string; c: number };
+  total:         { v: string; c: number };
 };
 
 Rules:
 - "v" is the extracted string value. Use "—" if missing.
 - "c" is your confidence 0-100 for that field.
-- Output ONLY the JSON object. No prose, no markdown, no code fences.
-- Currency values should include the currency symbol if present in the text.
+- Output ONLY the raw JSON object. No prose, no markdown, no code fences.
+- Currency values should include the symbol if present.
 - Dates should be ISO YYYY-MM-DD when possible.`;
 
-async function callAI(apiKey: string, body: unknown): Promise<{ status: number; bodyText: string }> {
+// ── Low-level fetch helper ───────────────────────────────────────────────────
+async function callGroq(
+  apiKey: string,
+  body: unknown,
+): Promise<{ status: number; bodyText: string }> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch(OPENROUTER_URL, {
+    const res = await fetch(GROQ_URL, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization:  `Bearer ${apiKey}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": typeof process !== "undefined" && process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : "https://dataflow-ai.replit.app",
-        "X-Title": "DataFlow AI",
       },
       signal: controller.signal,
-      body: JSON.stringify(body),
+      body:   JSON.stringify(body),
     });
-    const bodyText = await res.text();
-    return { status: res.status, bodyText };
+    return { status: res.status, bodyText: await res.text() };
   } finally {
-    clearTimeout(timeout);
+    clearTimeout(timer);
   }
 }
 
-export const extractFromText = createServerFn({ method: "POST" })
-  .inputValidator((data: unknown) => InputSchema.parse(data))
-  .handler(async ({ data }) => {
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey) {
-      console.error("[extract] Missing OPENROUTER_API_KEY env var");
-      return { ok: false as const, error: "Server is not configured (missing OPENROUTER_API_KEY)." };
+// ── Response parser (shared) ─────────────────────────────────────────────────
+function parseGroqResponse(
+  status: number,
+  bodyText: string,
+  model: string,
+): { ok: true; row: z.infer<typeof RowSchema> } | { ok: false; error: string } | null {
+  if (status !== 200) return null; // caller handles non-200
+
+  let json: any;
+  try { json = JSON.parse(bodyText); }
+  catch { return { ok: false, error: "Groq returned invalid JSON envelope." }; }
+
+  const content: string = json?.choices?.[0]?.message?.content ?? "";
+  const cleaned = content.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
+
+  let parsed: unknown;
+  try { parsed = JSON.parse(cleaned); }
+  catch {
+    console.error(`[extract/${model}] unparseable content:`, content.slice(0, 300));
+    return { ok: false, error: "AI returned an unparseable response. Please retry." };
+  }
+
+  const validated = RowSchema.safeParse(parsed);
+  if (!validated.success) {
+    console.error(`[extract/${model}] schema mismatch:`, JSON.stringify(validated.error.issues).slice(0, 300));
+    return { ok: false, error: "AI response missing required fields. Please retry." };
+  }
+  return { ok: true, row: validated.data };
+}
+
+// ── Retry wrapper ─────────────────────────────────────────────────────────────
+async function runWithRetry(
+  apiKey: string,
+  body: unknown,
+  model: string,
+): Promise<{ ok: true; row: z.infer<typeof RowSchema> } | { ok: false; error: string }> {
+  let lastError = "Unknown error";
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const { status, bodyText } = await callGroq(apiKey, body);
+
+      if (status === 200) {
+        const result = parseGroqResponse(status, bodyText, model);
+        return result ?? { ok: false, error: "Failed to parse response." };
+      }
+
+      console.error(`[extract/${model}] Groq ${status}:`, bodyText.slice(0, 400));
+
+      if (status === 503 || status === 502 || status === 524) {
+        lastError = "Groq is temporarily unavailable.";
+        await new Promise((r) => setTimeout(r, 5_000 * attempt));
+        continue;
+      }
+      if (status === 429) {
+        lastError = "Groq rate limit reached.";
+        await new Promise((r) => setTimeout(r, 3_000 * attempt));
+        continue;
+      }
+      if (status === 401 || status === 403) {
+        return { ok: false, error: "Groq authentication failed (invalid GROQ_API_KEY)." };
+      }
+      if (status === 404) {
+        return { ok: false, error: `Groq model not found: ${model}.` };
+      }
+      return { ok: false, error: `Groq error (${status}): ${bodyText.slice(0, 200)}` };
+    } catch (e: any) {
+      const isAbort = e?.name === "AbortError";
+      lastError = isAbort ? "Extraction timed out." : (e?.message ?? "Network error");
+      console.error(`[extract/${model}] fetch failed:`, lastError);
+      if (isAbort) break;
+      await new Promise((r) => setTimeout(r, 2_000));
     }
+  }
+
+  return { ok: false, error: `${lastError} Please try again.` };
+}
+
+// ── Server function: text extraction (llama-3.3-70b) ─────────────────────────
+export const extractFromText = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) => TextInputSchema.parse(d))
+  .handler(async ({ data }) => {
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) return { ok: false as const, error: "Server misconfigured (missing GROQ_API_KEY)." };
+
     if (data.text.length < 20) {
-      return {
-        ok: false as const,
-        error: "Could not read text from this PDF. It may be a scanned image (OCR not supported).",
-      };
+      return { ok: false as const, error: "__NEEDS_VISION__" };
     }
 
-    const requestBody = {
-      model: MODEL,
+    const body = {
+      model: TEXT_MODEL,
       messages: [
-        { role: "system", content: SYSTEM },
-        { role: "user", content: `Document: ${data.fileName}\n\n---\n${data.text.slice(0, 80_000)}` },
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user",   content: `Document: ${data.fileName}\n\n---\n${data.text.slice(0, 80_000)}` },
       ],
-      temperature: 0.1,
-      max_tokens: 600,
+      temperature:     0.1,
+      max_tokens:      600,
       response_format: { type: "json_object" },
     };
 
-    let attempt = 0;
-    let lastError = "Unknown error";
-    while (attempt < 3) {
-      attempt++;
-      try {
-        const { status, bodyText } = await callAI(apiKey, requestBody);
+    return runWithRetry(apiKey, body, TEXT_MODEL);
+  });
 
-        if (status === 200) {
-          let json: any;
-          try { json = JSON.parse(bodyText); }
-          catch { return { ok: false as const, error: "AI service returned invalid JSON envelope." }; }
+// ── Server function: vision extraction (llama-4-scout) ───────────────────────
+export const extractFromImage = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) => ImageInputSchema.parse(d))
+  .handler(async ({ data }) => {
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) return { ok: false as const, error: "Server misconfigured (missing GROQ_API_KEY)." };
 
-          const content: string = json?.choices?.[0]?.message?.content ?? "";
-          const cleaned = content.trim().replace(/^```json\s*/i, "").replace(/```$/i, "").trim();
+    const body = {
+      model: VISION_MODEL,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image_url",
+              image_url: { url: data.imageDataUrl },
+            },
+            {
+              type: "text",
+              text:  `${SYSTEM_PROMPT}\n\nDocument filename: ${data.fileName}\n\nExtract all relevant fields from this document image and return ONLY the JSON object.`,
+            },
+          ],
+        },
+      ],
+      temperature: 0.1,
+      max_tokens:  600,
+    };
 
-          let parsed: unknown;
-          try { parsed = JSON.parse(cleaned); }
-          catch {
-            console.error("[extract] Model returned unparseable content:", content.slice(0, 300));
-            return { ok: false as const, error: "AI returned an unparseable response. Please retry." };
-          }
-
-          const validated = RowSchema.safeParse(parsed);
-          if (!validated.success) {
-            console.error("[extract] Schema mismatch:", JSON.stringify(validated.error.issues).slice(0, 300));
-            return { ok: false as const, error: "AI response missing required fields. Please retry." };
-          }
-          return { ok: true as const, row: validated.data };
-        }
-
-        // Non-200 — log and decide whether to retry
-        console.error(`[extract] OpenRouter API ${status}:`, bodyText.slice(0, 400));
-
-        if (status === 503 || status === 524 || status === 502) {
-          lastError = "AI service is temporarily unavailable.";
-          await new Promise((r) => setTimeout(r, 5000 * attempt));
-          continue;
-        }
-        if (status === 429) {
-          lastError = "AI service is rate-limiting requests.";
-          await new Promise((r) => setTimeout(r, 3000 * attempt));
-          continue;
-        }
-        if (status === 401 || status === 403) {
-          return { ok: false as const, error: "AI service authentication failed (invalid OPENROUTER_API_KEY)." };
-        }
-        if (status === 404) {
-          return { ok: false as const, error: `AI model not found: ${MODEL}.` };
-        }
-        return { ok: false as const, error: `AI service error (${status}): ${bodyText.slice(0, 200)}` };
-      } catch (e: any) {
-        const isAbort = e?.name === "AbortError";
-        lastError = isAbort ? "Extraction timed out." : (e?.message || "Network error");
-        console.error("[extract] Fetch failed:", lastError, e);
-        if (isAbort) break;
-        // Network error — retry once more
-        await new Promise((r) => setTimeout(r, 2000));
-      }
-    }
-
-    return { ok: false as const, error: `${lastError} Please try again in a few seconds.` };
+    return runWithRetry(apiKey, body, VISION_MODEL);
   });

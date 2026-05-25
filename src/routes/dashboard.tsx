@@ -10,8 +10,8 @@ import { UpgradeModal } from "@/components/UpgradeModal";
 import { PdfPreview } from "@/components/PdfPreview";
 import { HelpButton } from "@/components/HelpButton";
 import { useAuth } from "@/lib/auth";
-import { extractFromText } from "@/lib/extract.functions";
-import { extractPdfText } from "@/lib/pdf";
+import { extractFromText, extractFromImage } from "@/lib/extract.functions";
+import { extractPdfText, pdfPageToImageDataUrl, imageFileToDataUrl } from "@/lib/pdf";
 import { getMyUsage, recordUpload } from "@/lib/usage.functions";
 import { exportJSON, exportCSV, exportXLSX } from "@/lib/exporters";
 import { track, identify } from "@/lib/analytics";
@@ -44,9 +44,10 @@ function Dashboard() {
   const [tab, setTab] = useState<Tab>("extract");
   const [usage, setUsage] = useState<Usage>({ plan: "free", used: 0, limit: 2, remaining: 2, unlimited: false });
   const [lastFile, setLastFile] = useState<File | null>(null);
-  const extract = useServerFn(extractFromText);
-  const fetchUsage = useServerFn(getMyUsage);
-  const logUpload = useServerFn(recordUpload);
+  const extract      = useServerFn(extractFromText);
+  const extractVision = useServerFn(extractFromImage);
+  const fetchUsage   = useServerFn(getMyUsage);
+  const logUpload    = useServerFn(recordUpload);
 
   const refreshUsage = useCallback(async () => {
     try {
@@ -81,22 +82,42 @@ function Dashboard() {
     setScanning(true);
     const started = Date.now();
 
-    try {
-      const { text, pages } = await extractPdfText(file);
-      const res = await extract({ data: { text, fileName: file.name } });
-      const result = res as
-        | { ok: false; error: string }
-        | { ok: true; row: Omit<ExtractedRow, "id" | "fileName"> };
+    const isImage = /^image\//i.test(file.type) || /\.(png|jpe?g|webp)$/i.test(file.name);
 
-      if (!result.ok) {
-        track("file_upload_failure", { reason: result.error, pages, duration_ms: Date.now() - started });
+    try {
+      type AIResult = { ok: false; error: string } | { ok: true; row: Omit<ExtractedRow, "id" | "fileName"> };
+      let res: AIResult;
+      let pages = 1;
+
+      if (isImage) {
+        // ── Image file → vision model directly ──
+        toast.info("Using vision model for image…");
+        const imageDataUrl = await imageFileToDataUrl(file);
+        res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
+      } else {
+        // ── PDF → try text first, fall back to vision if scanned ──
+        const extracted = await extractPdfText(file);
+        pages = extracted.pages;
+        res = (await extract({ data: { text: extracted.text, fileName: file.name } })) as AIResult;
+
+        if (!res.ok && res.error === "__NEEDS_VISION__") {
+          toast.info("Scanned PDF detected — switching to vision model…");
+          const imageDataUrl = await pdfPageToImageDataUrl(file, 1);
+          res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
+        }
+      }
+
+      if (!res.ok) {
+        track("file_upload_failure", { reason: res.error, pages, duration_ms: Date.now() - started });
         toast.error("Extraction failed", {
-          description: result.error,
+          description: res.error,
           action: { label: "Retry", onClick: () => runExtraction(file) },
         });
         setScanning(false);
         return;
       }
+
+      const result = res;
 
       const extracted: ExtractedRow = { id: crypto.randomUUID(), fileName: file.name, ...result.row };
 
