@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { ADMIN_EMAIL } from "./config";
 
@@ -13,7 +14,6 @@ export const getAdminStats = createServerFn({ method: "GET" })
   .handler(async ({ context }) => {
     const { supabase, claims } = context;
 
-    // Email comes directly from the verified JWT — no DB query needed
     assertAdmin(claims.email as string | undefined);
 
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -27,7 +27,6 @@ export const getAdminStats = createServerFn({ method: "GET" })
       supabase.from("subscriptions").select("user_id, plan, status"),
     ]);
 
-    // Build per-day bucket (last 7 days)
     const days: { day: string; count: number }[] = [];
     const dayMap: Record<string, number> = {};
     for (let i = 6; i >= 0; i--) {
@@ -42,7 +41,6 @@ export const getAdminStats = createServerFn({ method: "GET" })
     }
     for (const d of days) d.count = dayMap[d.day] ?? 0;
 
-    // Top users in last 24h
     const sinceMs = Date.now() - 24 * 60 * 60 * 1000;
     const perUser: Record<string, number> = {};
     for (const u of uploads7d.data ?? []) {
@@ -68,4 +66,66 @@ export const getAdminStats = createServerFn({ method: "GET" })
       tickets:      tickets.data ?? [],
       planCounts,
     };
+  });
+
+export type AdminUser = {
+  id: string;
+  email: string;
+  plan: "free" | "pro" | "team";
+  status: string;
+  uploads24h: number;
+  joinedAt: string;
+};
+
+export const getAdminUsers = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }): Promise<AdminUser[]> => {
+    const { supabase, claims } = context;
+    assertAdmin(claims.email as string | undefined);
+
+    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+    const [profilesRes, subsRes, uploadsRes] = await Promise.all([
+      supabase.from("profiles").select("id, email, created_at").order("created_at", { ascending: false }),
+      supabase.from("subscriptions").select("user_id, plan, status"),
+      supabase.from("uploads").select("user_id").gte("created_at", since24h),
+    ]);
+
+    const subByUser: Record<string, { plan: string; status: string }> = {};
+    for (const s of subsRes.data ?? []) {
+      subByUser[s.user_id as string] = { plan: s.plan as string, status: s.status as string };
+    }
+
+    const uploads24hCount: Record<string, number> = {};
+    for (const u of uploadsRes.data ?? []) {
+      uploads24hCount[u.user_id as string] = (uploads24hCount[u.user_id as string] ?? 0) + 1;
+    }
+
+    return (profilesRes.data ?? []).map((p) => ({
+      id: p.id as string,
+      email: p.email as string,
+      plan: ((subByUser[p.id as string]?.plan as "free" | "pro" | "team") ?? "free"),
+      status: subByUser[p.id as string]?.status ?? "active",
+      uploads24h: uploads24hCount[p.id as string] ?? 0,
+      joinedAt: p.created_at as string,
+    }));
+  });
+
+export const setUserPlan = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: unknown) =>
+    z.object({ userId: z.string().uuid(), plan: z.enum(["free", "pro", "team"]) }).parse(d)
+  )
+  .handler(async ({ context, data }) => {
+    const { supabase, claims } = context;
+    assertAdmin(claims.email as string | undefined);
+
+    const { error } = await supabase
+      .from("subscriptions")
+      .upsert(
+        { user_id: data.userId, plan: data.plan, status: "active", updated_at: new Date().toISOString() },
+        { onConflict: "user_id" }
+      );
+    if (error) return { ok: false as const, error: error.message };
+    return { ok: true as const };
   });

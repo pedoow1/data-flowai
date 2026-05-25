@@ -1,11 +1,13 @@
 import { createFileRoute, Navigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
 import { Header } from "@/components/Layout";
 import { PrivacyBadge } from "@/components/Privacy";
 import { Users, ShieldCheck, FileText, TrendingUp, Inbox, Loader2, UserCheck } from "lucide-react";
-import { getAdminStats } from "@/lib/admin.functions";
+import { getAdminStats, getAdminUsers, setUserPlan, type AdminUser } from "@/lib/admin.functions";
 
 export const Route = createFileRoute("/admin")({
   head: () => ({ meta: [{ title: "Admin — DataFlow AI" }] }),
@@ -14,14 +16,34 @@ export const Route = createFileRoute("/admin")({
 
 type Stats = Awaited<ReturnType<typeof getAdminStats>>;
 
+const PLAN_COLOR: Record<string, string> = {
+  free: "text-muted-foreground border-border/60",
+  pro:  "text-lime border-lime/60",
+  team: "text-yellow-400 border-yellow-400/60",
+};
+
 function AdminPage() {
   const { isAdmin, ready, isAuthed } = useAuth();
   const fetchStats = useServerFn(getAdminStats);
+  const fetchUsers = useServerFn(getAdminUsers);
+  const changePlan = useServerFn(setUserPlan);
+  const qc = useQueryClient();
+
+  const [changingId, setChangingId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+
   const { data, isLoading, error } = useQuery<Stats>({
     queryKey: ["admin-stats"],
     queryFn: () => fetchStats() as Promise<Stats>,
     enabled: ready && isAuthed && isAdmin,
     refetchInterval: 10_000,
+  });
+
+  const { data: users, isLoading: usersLoading } = useQuery<AdminUser[]>({
+    queryKey: ["admin-users"],
+    queryFn: () => fetchUsers() as Promise<AdminUser[]>,
+    enabled: ready && isAuthed && isAdmin,
+    refetchInterval: 30_000,
   });
 
   if (ready && !isAuthed) return <Navigate to="/login" />;
@@ -30,6 +52,25 @@ function AdminPage() {
   const maxDay = Math.max(1, ...(data?.uploadsByDay ?? []).map(d => d.count));
   const totalPaid = (data?.planCounts.pro ?? 0) + (data?.planCounts.team ?? 0);
   const freeCount = Math.max(0, (data?.totalUsers ?? 0) - totalPaid);
+
+  const handlePlanChange = async (userId: string, plan: "free" | "pro" | "team") => {
+    setChangingId(userId);
+    try {
+      const res = await changePlan({ data: { userId, plan } }) as { ok: boolean; error?: string };
+      if (!res.ok) throw new Error(res.error ?? "Unknown error");
+      toast.success(`Plan updated to ${plan.toUpperCase()}`);
+      await qc.invalidateQueries({ queryKey: ["admin-users"] });
+      await qc.invalidateQueries({ queryKey: ["admin-stats"] });
+    } catch (e) {
+      toast.error("Failed to update plan", { description: (e as Error).message });
+    } finally {
+      setChangingId(null);
+    }
+  };
+
+  const filtered = (users ?? []).filter(u =>
+    !search || u.email.toLowerCase().includes(search.toLowerCase())
+  );
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -118,9 +159,118 @@ function AdminPage() {
             </Panel>
           </>
         )}
+
+        {/* ── Users Management ── */}
+        <div className="mt-4 glass rounded-2xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-border flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <UserCheck className="h-4 w-4 text-lime" />
+              <span className="font-semibold text-sm">
+                Users Management
+                {users && <span className="ml-2 text-xs text-muted-foreground font-normal">({users.length} users)</span>}
+              </span>
+            </div>
+            <input
+              type="text"
+              placeholder="Search by email…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="h-8 px-3 text-xs rounded-lg bg-white/5 border border-border focus:outline-none focus:border-lime/60 w-52"
+            />
+          </div>
+
+          {usersLoading && (
+            <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground text-sm">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading users…
+            </div>
+          )}
+
+          {!usersLoading && filtered.length === 0 && (
+            <Empty>{search ? `No users matching "${search}"` : "No users found."}</Empty>
+          )}
+
+          {!usersLoading && filtered.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border text-xs text-muted-foreground uppercase tracking-wider">
+                    <th className="text-left px-4 py-2.5 font-medium">#</th>
+                    <th className="text-left px-4 py-2.5 font-medium">Email</th>
+                    <th className="text-left px-4 py-2.5 font-medium">Plan</th>
+                    <th className="text-left px-4 py-2.5 font-medium">Uploads 24h</th>
+                    <th className="text-left px-4 py-2.5 font-medium">Joined</th>
+                    <th className="text-left px-4 py-2.5 font-medium">Change Plan</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/50">
+                  {filtered.map((u, i) => (
+                    <UserRow
+                      key={u.id}
+                      index={i + 1}
+                      user={u}
+                      changing={changingId === u.id}
+                      onPlanChange={(plan) => handlePlanChange(u.id, plan)}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </main>
       <PrivacyBadge />
     </div>
+  );
+}
+
+function UserRow({ index, user, changing, onPlanChange }: {
+  index: number;
+  user: AdminUser;
+  changing: boolean;
+  onPlanChange: (plan: "free" | "pro" | "team") => void;
+}) {
+  return (
+    <tr className="hover:bg-white/[0.02] transition-colors">
+      <td className="px-4 py-3 text-xs text-muted-foreground">{index}</td>
+      <td className="px-4 py-3">
+        <span className="font-mono text-xs truncate max-w-[220px] block">{user.email}</span>
+      </td>
+      <td className="px-4 py-3">
+        <span className={`text-xs font-semibold border rounded px-1.5 py-0.5 ${PLAN_COLOR[user.plan] ?? PLAN_COLOR.free}`}>
+          {user.plan.toUpperCase()}
+        </span>
+      </td>
+      <td className="px-4 py-3">
+        <span className={`text-xs font-mono ${user.uploads24h > 0 ? "text-lime" : "text-muted-foreground"}`}>
+          {user.uploads24h}
+        </span>
+      </td>
+      <td className="px-4 py-3 text-xs text-muted-foreground">
+        {new Date(user.joinedAt).toLocaleDateString()}
+      </td>
+      <td className="px-4 py-3">
+        <div className="flex gap-1">
+          {(["free", "pro", "team"] as const).map((p) => (
+            <button
+              key={p}
+              disabled={changing || p === user.plan}
+              onClick={() => onPlanChange(p)}
+              className={`px-2 py-1 rounded text-[10px] font-semibold border transition disabled:opacity-40 ${
+                p === user.plan
+                  ? p === "team"
+                    ? "bg-yellow-400/20 text-yellow-400 border-yellow-400/50"
+                    : p === "pro"
+                    ? "bg-lime/20 text-lime border-lime/50"
+                    : "bg-white/10 text-foreground border-border"
+                  : "bg-transparent text-muted-foreground border-border/50 hover:text-foreground hover:border-foreground/30"
+              }`}
+            >
+              {changing && p === user.plan ? <Loader2 className="h-2.5 w-2.5 animate-spin inline" /> : p.toUpperCase()}
+            </button>
+          ))}
+        </div>
+      </td>
+    </tr>
   );
 }
 
