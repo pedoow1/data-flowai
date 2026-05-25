@@ -1,0 +1,78 @@
+12:44:59.491 Running build in Washington, D.C., USA (East) – iad1
+12:44:59.493 Build machine configuration: 2 cores, 8 GB
+12:44:59.523 Cloning github.com/pedoow1/data-flowai (Branch: main, Commit: 6f9aaf4)
+12:44:59.525 Skipping build cache, deployment was triggered without cache.
+12:45:00.324 Cloning completed: 800.000ms
+12:45:01.227 Running "vercel build"
+12:45:01.261 Vercel CLI 54.4.1
+12:45:02.127 Installing dependencies...
+12:45:04.809 npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+12:45:12.291 npm warn deprecated recharts@2.15.4: 1.x and 2.x branches are no longer active. Bump to Recharts v3 to receive latest features and bugfixes. See https://github.com/recharts/recharts/wiki/3.0-migration-guide
+12:45:17.503 
+12:45:17.504 added 575 packages in 15s
+12:45:17.504 
+12:45:17.506 125 packages are looking for funding
+12:45:17.506   run `npm fund` for details
+12:45:17.711 
+12:45:17.712 > build
+12:45:17.712 > vite build
+12:45:17.712 
+12:45:21.141 vite v7.3.3 building client environment for production...
+12:45:21.206 transforming...
+12:45:23.134 Found 1 warning while optimizing generated CSS:
+12:45:23.135 
+12:45:23.136 │   initial-value: 0;
+12:45:23.136 │ }
+12:45:23.136 │ @import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap");
+12:45:23.136 ┆        ^-- @import rules must precede all rules aside from @charset and @layer statements
+12:45:23.136 ┆
+12:45:23.136 │ :root {
+12:45:23.136 │   --radius: 0.75rem;
+12:45:23.137 
+12:45:28.745 ✓ 1996 modules transformed.
+12:45:29.222 rendering chunks...
+12:45:29.758 computing gzip size...
+12:45:29.805 dist/client/.assetsignore                           0.02 kB
+12:45:29.806 dist/client/assets/pdf.worker.min-iDqQPrd3.mjs  1,232.30 kB
+12:45:29.807 dist/client/assets/styles-C2scqXz9.css             88.37 kB │ gzip:  14.41 kB
+12:45:29.807 dist/client/assets/check-D4ad2hLk.js                0.12 kB │ gzip:   0.14 kB
+12:45:29.807 dist/client/assets/arrow-right-Dpwdo9Ja.js          0.17 kB │ gzip:   0.16 kB
+12:45:29.807 dist/client/assets/lock-CxOYWOf_.js                 0.20 kB │ gzip:   0.19 kB
+12:45:29.807 dist/client/assets/circle-alert-BZ34ISMc.js         0.25 kB │ gzip:   0.19 kB
+12:45:29.807 dist/client/assets/file-text-BXymcVei.js            0.39 kB │ gzip:   0.25 kB
+12:45:29.807 dist/client/assets/zap-N7ZuY8zj.js                  0.84 kB │ gzip:   0.43 kB
+12:45:29.808 dist/client/assets/Privacy-6fP3d8Qx.js              2.51 kB │ gzip:   1.17 kB
+12:45:29.808 dist/client/assets/pricing-ByWzqce9.js              2.99 kB │ gzip:   1.27 kB
+12:45:29.808 dist/client/assets/privacy-ByX_yqdH.js              3.18 kB │ gzip:   1.24 kB
+12:45:29.808 dist/client/assets/terms-BceR5zyv.js                3.29 kB │ gzip:   1.23 kB
+12:45:29.808 dist/client/assets/index-2WGAZ_PS.js                3.48 kB │ gzip:   1.67 kB
+12:45:29.808 dist/client/assets/login-C3xoxPer.js                4.05 kB │ gzip:   1.78 kB
+12:45:29.808 dist/client/assets/auth-middleware-BY-ViUTX.js      4.71 kB │ gzip:   2.06 kB
+12:45:29.808 dist/client/assets/signup-CPdAG2W_.js               5.59 kB │ gzip:   2.26 kB
+12:45:29.809 dist/client/assets/Layout-Cprdvexw.js               6.83 kB │ gzip:   2.77 kB
+12:45:29.809 dist/client/assets/index-D0cGirRc.js                7.79 kB │ gzip:   2.47 kB
+12:45:29.809 dist/client/assets/admin-DLQdVFQD.js               14.26 kB │ gzip:   5.20 kB
+12:45:29.809 dist/client/assets/xlsx-CNerDvZX.js               429.19 kB │ gzip: 142.94 kB
+12:45:29.809 dist/client/assets/dashboard-CO4O7Smg.js          442.03 kB │ gzip: 132.17 kB
+12:45:29.810 dist/client/assets/index-UTwcM83V.js              786.98 kB │ gzip: 239.85 kB
+12:45:29.810 ✓ built in 8.63s
+12:45:29.810 vite v7.3.3 building ssr environment for production...
+12:45:29.810 
+12:45:29.810 (!) Some chunks are larger than 500 kB after minification. Consider:
+12:45:29.810 - Using dynamic import() to code-split the application
+12:45:29.810 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+12:45:29.810 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+12:45:29.820 transforming...
+12:45:31.843 Found 1 warning while optimizing generated CSS:
+12:45:31.844 
+12:45:31.847 │   initial-value: 0;
+12:45:31.847 │ }
+12:45:31.847 │ @import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap");
+12:45:31.848 ┆        ^-- @import rules must precede all rules aside from @charset and @layer statements
+12:45:31.848 ┆
+12:45:31.848 │ :root {
+12:45:31.848 │   --radius: 0.75rem;
+12:45:31.848 
+12:45:36.283 ✓ 2062 modules transformed.
+12:45:36.562 rendering chunks...
+12:45:37.172 Using secrets defined in .env
