@@ -1,12 +1,6 @@
-import { createMiddleware } from '@tanstack/react-start'
-import { supabase } from './client'
+import { createMiddleware } from "@tanstack/react-start";
 
-export const attachSupabaseAuth = createMiddleware({ type: 'function' }).client(
-  async ({ next }) => {
-    const { data } = await supabase.auth.getSession()
-    const token = data.session?.access_token
-    return next({
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
-  },
-)
+// No-op attacher — Replit Auth is handled server-side via @replit/repl-auth headers.
+export const attachSupabaseAuth = createMiddleware({ type: "function" }).client(
+  async ({ next }) => next({})
+);

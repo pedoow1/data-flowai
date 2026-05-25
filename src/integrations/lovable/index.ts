@@ -1,19 +1,11 @@
-import { supabase } from "../supabase/client";
-
-type SignInOptions = {
-  redirect_uri?: string;
-};
-
+// Lovable integration removed — this project now uses Replit Auth.
 export const lovable = {
   auth: {
-    signInWithOAuth: async (provider: "google" | "apple" | "microsoft", opts?: SignInOptions) => {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: provider as "google",
-        options: {
-          redirectTo: opts?.redirect_uri ?? (typeof window !== "undefined" ? window.location.origin + "/dashboard" : undefined),
-        },
-      });
-      if (error) return { error };
+    signInWithOAuth: async (_provider: string, _opts?: { redirect_uri?: string }) => {
+      if (typeof window !== "undefined") {
+        const host = window.location.host;
+        window.location.href = `https://replit.com/auth_with_repl_site?domain=${host}`;
+      }
       return { redirected: true };
     },
   },
