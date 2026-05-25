@@ -6,11 +6,14 @@
 // You can pass additional config via defineConfig({ vite: { ... } }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 
-// Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
-// @cloudflare/vite-plugin builds from this — wrangler.jsonc main alone is insufficient.
 export default defineConfig({
+  // Disable the Cloudflare Workers plugin — it causes the build to hang
+  // (miniflare starts as a persistent process) and produces CF-specific output.
+  cloudflare: false,
   tanstackStart: {
-    server: { entry: "server" },
+    // Use the Vercel preset so Nitro outputs to .vercel/output/
+    // and all SSR routes are handled as Vercel serverless functions.
+    server: { preset: "vercel" },
   },
   vite: {
     server: {
