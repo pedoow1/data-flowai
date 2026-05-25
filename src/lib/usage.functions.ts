@@ -1,11 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { PLAN_LIMITS, type Plan } from "./config";
+import { PLAN_LIMITS, ADMIN_EMAIL, type Plan } from "./config";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-async function getPlanAndUsage(supabase: any, userId: string) {
+async function getPlanAndUsage(supabase: any, userId: string, isAdminOverride = false) {
   const since = new Date(Date.now() - DAY_MS).toISOString();
   const [subRes, countRes, adminRes] = await Promise.all([
     supabase.from("subscriptions").select("plan").eq("user_id", userId).maybeSingle(),
@@ -16,7 +16,7 @@ async function getPlanAndUsage(supabase: any, userId: string) {
       .gte("created_at", since),
     supabase.from("user_roles").select("role").eq("user_id", userId).eq("role", "admin").maybeSingle(),
   ]);
-  const isAdmin = !!adminRes.data;
+  const isAdmin = isAdminOverride || !!adminRes.data;
   const plan: Plan = isAdmin ? "team" : ((subRes.data?.plan as Plan) ?? "free");
   const used = countRes.count ?? 0;
   const limitNum = PLAN_LIMITS[plan];
@@ -29,21 +29,27 @@ async function getPlanAndUsage(supabase: any, userId: string) {
 export const getMyUsage = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
-    const { supabase, userId } = context;
-    return getPlanAndUsage(supabase, userId);
+    const { supabase, userId, claims } = context;
+    const isAdminEmail =
+      typeof claims?.email === "string" &&
+      claims.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+    return getPlanAndUsage(supabase, userId, isAdminEmail);
   });
 
 export const recordUpload = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => z.object({ fileName: z.string().min(1).max(255) }).parse(d))
   .handler(async ({ context, data }) => {
-    const { supabase, userId } = context;
-    const usage = await getPlanAndUsage(supabase, userId);
+    const { supabase, userId, claims } = context;
+    const isAdminEmail =
+      typeof claims?.email === "string" &&
+      claims.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+    const usage = await getPlanAndUsage(supabase, userId, isAdminEmail);
     if (!usage.unlimited && usage.remaining <= 0) {
       return { ok: false as const, error: "Daily limit reached for your plan.", usage };
     }
     const { error } = await supabase.from("uploads").insert({ user_id: userId, file_name: data.fileName });
     if (error) return { ok: false as const, error: error.message, usage };
-    const after = await getPlanAndUsage(supabase, userId);
+    const after = await getPlanAndUsage(supabase, userId, isAdminEmail);
     return { ok: true as const, usage: after };
   });
