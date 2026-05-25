@@ -193,9 +193,6 @@ function Dashboard() {
                     <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Extract documents</h1>
                     <p className="text-muted-foreground text-sm mt-1">Drop a PDF — your data never leaves your browser unencrypted.</p>
                   </div>
-                  <span className="inline-flex items-center gap-1.5 text-xs glass rounded-full px-3 py-1.5">
-                    <Sparkles className="h-3 w-3 text-lime" /> Qwen 2.5 · Live AI
-                  </span>
                 </div>
 
                 <FileUploader onFiles={onFiles} disabled={scanning} />
