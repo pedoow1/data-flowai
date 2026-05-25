@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { supabaseAdmin, hasAdminClient } from "@/integrations/supabase/client.server";
+import { db } from "@server/db";
+import { pendingSubscriptions } from "@shared/schema";
 import { GUMROAD_PRODUCT_TO_PLAN, type Plan } from "@/lib/config";
 
 export const Route = createFileRoute("/api/public/gumroad-webhook")({
@@ -45,35 +47,51 @@ export const Route = createFileRoute("/api/public/gumroad-webhook")({
           }
         }
 
-        const { data: profile } = await supabaseAdmin
-          .from("profiles")
-          .select("id")
-          .ilike("email", email)
-          .maybeSingle();
+        // If we have admin access, update Supabase directly
+        if (hasAdminClient()) {
+          const { data: profile } = await supabaseAdmin
+            .from("profiles")
+            .select("id")
+            .ilike("email", email)
+            .maybeSingle();
 
-        if (profile) {
-          const { error } = await supabaseAdmin
-            .from("subscriptions")
-            .upsert({
-              user_id: profile.id,
-              plan: newPlan,
-              status: isCancel ? "cancelled" : "active",
-              gumroad_sale_id: saleId,
-              gumroad_subscription_id: subId,
-              updated_at: new Date().toISOString(),
-            }, { onConflict: "user_id" });
-          if (error) {
-            console.error("[gumroad] subscription upsert failed:", error);
-            return new Response("DB error", { status: 500 });
-          }
-        } else {
-          if (newPlan !== "free") {
+          if (profile) {
+            const { error } = await supabaseAdmin
+              .from("subscriptions")
+              .upsert({
+                user_id: profile.id,
+                plan: newPlan,
+                status: isCancel ? "cancelled" : "active",
+                gumroad_sale_id: saleId,
+                gumroad_subscription_id: subId,
+                updated_at: new Date().toISOString(),
+              }, { onConflict: "user_id" });
+            if (error) {
+              console.error("[gumroad] subscription upsert failed:", error);
+              return new Response("DB error", { status: 500 });
+            }
+          } else if (newPlan !== "free") {
             await supabaseAdmin.from("pending_subscriptions").upsert({
               email,
               plan: newPlan,
               gumroad_sale_id: saleId,
               gumroad_subscription_id: subId,
             });
+          }
+        } else {
+          // No admin key — store in Replit DB as pending for manual processing
+          if (newPlan !== "free") {
+            try {
+              await db.insert(pendingSubscriptions)
+                .values({ email, plan: newPlan, gumroadSaleId: saleId ?? null, gumroadSubscriptionId: subId ?? null })
+                .onConflictDoUpdate({
+                  target: pendingSubscriptions.email,
+                  set: { plan: newPlan, gumroadSaleId: saleId ?? null, gumroadSubscriptionId: subId ?? null },
+                });
+              console.log(`[gumroad] Stored pending subscription for ${email} (plan: ${newPlan}) — no admin key available`);
+            } catch (e) {
+              console.error("[gumroad] pending insert failed:", e);
+            }
           }
         }
 

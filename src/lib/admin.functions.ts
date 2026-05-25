@@ -1,9 +1,20 @@
+// Admin-only server fns. Uses the authenticated user's Supabase client,
+// which has full read access via "admins read all X" RLS policies.
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { ADMIN_EMAIL } from "./config";
 
-async function assertAdmin(userId: string) {
-  const { data } = await supabaseAdmin
+async function assertAdmin(supabase: any, userId: string) {
+  // Fast path: check claims email against known admin
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("email")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (profile?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase()) return;
+
+  const { data } = await supabase
     .from("user_roles")
     .select("role")
     .eq("user_id", userId)
@@ -15,20 +26,21 @@ async function assertAdmin(userId: string) {
 export const getAdminStats = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
-    const { userId } = context;
-    await assertAdmin(userId);
+    const { supabase, userId } = context;
+    await assertAdmin(supabase, userId);
 
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
     const [users, uploads24h, uploads7d, tickets, subs] = await Promise.all([
-      supabaseAdmin.from("profiles").select("id, email, created_at").order("created_at", { ascending: false }),
-      supabaseAdmin.from("uploads").select("id", { count: "exact", head: true }).gte("created_at", since24h),
-      supabaseAdmin.from("uploads").select("user_id, created_at").gte("created_at", since7d),
-      supabaseAdmin.from("support_tickets").select("*").order("created_at", { ascending: false }).limit(50),
-      supabaseAdmin.from("subscriptions").select("user_id, plan, status"),
+      supabase.from("profiles").select("id, email, created_at").order("created_at", { ascending: false }),
+      supabase.from("uploads").select("id", { count: "exact", head: true }).gte("created_at", since24h),
+      supabase.from("uploads").select("user_id, created_at").gte("created_at", since7d),
+      supabase.from("support_tickets").select("*").order("created_at", { ascending: false }).limit(50),
+      supabase.from("subscriptions").select("user_id, plan, status"),
     ]);
 
+    // Build per-day bucket (last 7 days)
     const days: { day: string; count: number }[] = [];
     const dayMap: Record<string, number> = {};
     for (let i = 6; i >= 0; i--) {
@@ -43,6 +55,7 @@ export const getAdminStats = createServerFn({ method: "GET" })
     }
     for (const d of days) d.count = dayMap[d.day] ?? 0;
 
+    // Top users (24h)
     const sinceMs = Date.now() - 24 * 60 * 60 * 1000;
     const perUser: Record<string, number> = {};
     for (const u of uploads7d.data ?? []) {

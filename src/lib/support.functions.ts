@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { db } from "@server/db";
+import { supportTickets } from "@shared/schema";
 
 const Input = z.object({
   name: z.string().trim().min(1).max(120),
@@ -41,7 +42,7 @@ export const sendSupport = createServerFn({ method: "POST" })
     }
 
     try {
-      await supabaseAdmin.from("support_tickets").insert({
+      await db.insert(supportTickets).values({
         name: data.name,
         email: data.email || null,
         message: data.message,

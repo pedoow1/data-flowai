@@ -6,12 +6,7 @@ function createSupabaseAdminClient() {
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-    const missing = [
-      ...(!SUPABASE_URL ? ['SUPABASE_URL'] : []),
-      ...(!SUPABASE_SERVICE_ROLE_KEY ? ['SUPABASE_SERVICE_ROLE_KEY'] : []),
-    ];
-    console.error(`[Supabase] Missing env vars: ${missing.join(', ')}`);
-    throw new Error(`Missing Supabase environment variable(s): ${missing.join(', ')}.`);
+    return null;
   }
 
   return createClient<Database>(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
@@ -25,9 +20,21 @@ function createSupabaseAdminClient() {
 
 let _supabaseAdmin: ReturnType<typeof createSupabaseAdminClient> | undefined;
 
-export const supabaseAdmin = new Proxy({} as ReturnType<typeof createSupabaseAdminClient>, {
+function getAdmin() {
+  if (_supabaseAdmin === undefined) _supabaseAdmin = createSupabaseAdminClient();
+  return _supabaseAdmin;
+}
+
+// Proxy that returns null if key is not configured.
+// Callers should check for null before using.
+export const supabaseAdmin = new Proxy({} as NonNullable<ReturnType<typeof createSupabaseAdminClient>>, {
   get(_, prop, receiver) {
-    if (!_supabaseAdmin) _supabaseAdmin = createSupabaseAdminClient();
-    return Reflect.get(_supabaseAdmin, prop, receiver);
+    const client = getAdmin();
+    if (!client) return undefined;
+    return Reflect.get(client, prop, receiver);
   },
 });
+
+export function hasAdminClient(): boolean {
+  return getAdmin() !== null;
+}
