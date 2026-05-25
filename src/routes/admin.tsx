@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { Header } from "@/components/Layout";
 import { PrivacyBadge } from "@/components/Privacy";
-import { Users, ShieldCheck, FileText, TrendingUp, Inbox, Loader2 } from "lucide-react";
+import { Users, ShieldCheck, FileText, TrendingUp, Inbox, Loader2, UserCheck } from "lucide-react";
 import { getAdminStats } from "@/lib/admin.functions";
 
 export const Route = createFileRoute("/admin")({
@@ -28,6 +28,8 @@ function AdminPage() {
   if (ready && !isAdmin) return <Navigate to="/dashboard" />;
 
   const maxDay = Math.max(1, ...(data?.uploadsByDay ?? []).map(d => d.count));
+  const totalPaid = (data?.planCounts.pro ?? 0) + (data?.planCounts.team ?? 0);
+  const freeCount = Math.max(0, (data?.totalUsers ?? 0) - totalPaid);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -50,11 +52,22 @@ function AdminPage() {
 
         {data && (
           <>
+            {/* ── Top stats ── */}
             <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
               <Stat icon={<TrendingUp className="h-4 w-4" />} label="Uploads (24h)" value={data.uploadsToday} />
               <Stat icon={<Users className="h-4 w-4" />} label="Registered Users" value={data.totalUsers} />
               <Stat icon={<FileText className="h-4 w-4" />} label="Pro Subscribers" value={data.planCounts.pro ?? 0} />
               <Stat icon={<ShieldCheck className="h-4 w-4" />} label="Team Subscribers" value={data.planCounts.team ?? 0} />
+            </div>
+
+            {/* ── Plan distribution ── */}
+            <div className="glass rounded-2xl p-5 mb-4">
+              <h3 className="text-xs uppercase tracking-wider text-muted-foreground mb-4">Plan Distribution</h3>
+              <div className="grid grid-cols-3 gap-4">
+                <PlanBadge label="Free" count={freeCount} total={data.totalUsers} color="text-muted-foreground" bar="bg-white/20" />
+                <PlanBadge label="Pro" count={data.planCounts.pro ?? 0} total={data.totalUsers} color="text-lime" bar="bg-lime" />
+                <PlanBadge label="Team" count={data.planCounts.team ?? 0} total={data.totalUsers} color="text-yellow-400" bar="bg-yellow-400" />
+              </div>
             </div>
 
             <div className="grid lg:grid-cols-2 gap-4 mb-4">
@@ -107,6 +120,22 @@ function AdminPage() {
         )}
       </main>
       <PrivacyBadge />
+    </div>
+  );
+}
+
+function PlanBadge({ label, count, total, color, bar }: {
+  label: string; count: number; total: number; color: string; bar: string;
+}) {
+  const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+  return (
+    <div className="text-center">
+      <div className={`text-2xl font-bold ${color}`}>{count}</div>
+      <div className="text-xs text-muted-foreground mt-0.5">{label}</div>
+      <div className="mt-2 h-1.5 bg-white/5 rounded-full overflow-hidden">
+        <div className={`h-full ${bar} rounded-full transition-all`} style={{ width: `${pct}%` }} />
+      </div>
+      <div className="text-[10px] text-muted-foreground mt-1">{pct}%</div>
     </div>
   );
 }
