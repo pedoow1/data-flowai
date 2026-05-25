@@ -16,7 +16,7 @@ const RowSchema = z.object({
   total: CellSchema,
 });
 
-const MODEL = "qwen/qwen-2.5-7b-instruct:free";
+const MODEL = "qwen/qwen3-coder:free";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const TIMEOUT_MS = 120_000;
 
