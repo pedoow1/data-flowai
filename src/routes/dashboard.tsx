@@ -96,15 +96,32 @@ function Dashboard() {
         const imageDataUrl = await imageFileToDataUrl(file);
         res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
       } else {
-        // ── PDF → try text first, fall back to vision if scanned ──
-        const extracted = await extractPdfText(file);
-        pages = extracted.pages;
-        res = (await extract({ data: { text: extracted.text, fileName: file.name } })) as AIResult;
+        // ── PDF → try text first, fall back to vision if scanned or encrypted ──
+        let pdfText = "";
+        let usedVisionFallback = false;
+        try {
+          const extracted = await extractPdfText(file);
+          pages = extracted.pages;
+          pdfText = extracted.text;
+        } catch (pdfErr: unknown) {
+          // Encrypted / password-protected PDF or crypto mismatch → use vision model
+          const msg = pdfErr instanceof Error ? pdfErr.message : String(pdfErr);
+          console.warn("[pdf] text extraction failed, falling back to vision:", msg);
+          usedVisionFallback = true;
+        }
 
-        if (!res.ok && res.error === "__NEEDS_VISION__") {
-          toast.info("Scanned PDF detected — switching to vision model…");
+        if (usedVisionFallback || pdfText.length < 20) {
+          if (usedVisionFallback) toast.info("Encrypted PDF detected — switching to vision model…");
+          else toast.info("Scanned PDF detected — switching to vision model…");
           const imageDataUrl = await pdfPageToImageDataUrl(file, 1);
           res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
+        } else {
+          res = (await extract({ data: { text: pdfText, fileName: file.name } })) as AIResult;
+          if (!res.ok && res.error === "__NEEDS_VISION__") {
+            toast.info("Scanned PDF detected — switching to vision model…");
+            const imageDataUrl = await pdfPageToImageDataUrl(file, 1);
+            res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
+          }
         }
       }
 

@@ -15,7 +15,14 @@ export function useAuth() {
   const [email, setEmail] = useState<string | null>(_cachedEmail);
   const [userId, setUserId] = useState<string | null>(_cachedUserId);
   const [isAdmin, setIsAdmin] = useState<boolean>(_cachedIsAdmin);
-  const [ready, setReady] = useState(false);
+  const [ready, setReady] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    // If no Supabase token in localStorage we're definitely logged out — show buttons immediately
+    const hasToken = Object.keys(localStorage).some(
+      (k) => k.startsWith("sb-") && k.endsWith("-auth-token")
+    );
+    return !hasToken;
+  });
 
   const applyUser = useCallback((u: { id: string; email?: string | null } | null) => {
     const id = u?.id ?? null;

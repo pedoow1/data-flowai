@@ -136,12 +136,26 @@ export const setUserPlan = createServerFn({ method: "POST" })
     assertAdmin(claims.email as string | undefined);
 
     const supabase = getServiceClient();
-    const { error } = await supabase
+
+    // Try update first; if no row exists, insert
+    const { data: existing } = await supabase
       .from("subscriptions")
-      .upsert(
-        { user_id: data.userId, plan: data.plan, status: "active", updated_at: new Date().toISOString() },
-        { onConflict: "user_id" }
-      );
+      .select("user_id")
+      .eq("user_id", data.userId)
+      .maybeSingle();
+
+    let error;
+    if (existing) {
+      ({ error } = await supabase
+        .from("subscriptions")
+        .update({ plan: data.plan, status: "active", updated_at: new Date().toISOString() })
+        .eq("user_id", data.userId));
+    } else {
+      ({ error } = await supabase
+        .from("subscriptions")
+        .insert({ user_id: data.userId, plan: data.plan, status: "active", updated_at: new Date().toISOString() }));
+    }
+
     if (error) return { ok: false as const, error: error.message };
     return { ok: true as const };
   });
