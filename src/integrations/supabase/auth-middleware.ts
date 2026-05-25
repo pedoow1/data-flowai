@@ -22,19 +22,16 @@ export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server
 
     const authHeader = request.headers.get('authorization');
 
-    if (!authHeader) {
-      throw new Error('Unauthorized: No authorization header provided');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      throw new Error('Unauthorized: No bearer token provided');
     }
 
-    if (!authHeader.startsWith('Bearer ')) {
-      throw new Error('Unauthorized: Only Bearer tokens are supported');
-    }
-
-    const token = authHeader.replace('Bearer ', '');
+    const token = authHeader.replace('Bearer ', '').trim();
     if (!token) {
-      throw new Error('Unauthorized: No token provided');
+      throw new Error('Unauthorized: Empty token');
     }
 
+    // Create a per-request Supabase client that passes the user's JWT
     const supabase = createClient<Database>(
       SUPABASE_URL,
       SUPABASE_PUBLISHABLE_KEY,
@@ -52,20 +49,21 @@ export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server
       }
     );
 
-    const { data, error } = await supabase.auth.getClaims(token);
-    if (error || !data?.claims) {
-      throw new Error('Unauthorized: Invalid token');
-    }
+    // Validate the JWT against Supabase — returns the authenticated user
+    const { data: { user }, error } = await supabase.auth.getUser(token);
 
-    if (!data.claims.sub) {
-      throw new Error('Unauthorized: No user ID found in token');
+    if (error || !user) {
+      throw new Error('Unauthorized: Invalid or expired token');
     }
 
     return next({
       context: {
         supabase,
-        userId: data.claims.sub,
-        claims: data.claims,
+        userId: user.id,
+        claims: {
+          sub: user.id,
+          email: user.email,
+        },
       },
     });
   },
