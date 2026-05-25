@@ -38,7 +38,8 @@ export function useAuth() {
       const u = session?.user ?? null;
       setUserId(u?.id ?? null);
       setEmail(u?.email ?? null);
-      void refreshRole(u?.id ?? null, u?.email ?? null).finally(() => setReady(true));
+      setReady(true);
+      void refreshRole(u?.id ?? null, u?.email ?? null);
     });
 
     return () => subscription.unsubscribe();

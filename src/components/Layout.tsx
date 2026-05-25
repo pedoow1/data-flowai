@@ -14,9 +14,7 @@ export function Header() {
         <nav className="flex items-center gap-1 text-sm">
           <Link to="/" className="hidden sm:block px-3 py-1.5 rounded-md text-muted-foreground hover:text-foreground" activeOptions={{ exact: true }} activeProps={{ className: "text-foreground" }}>Home</Link>
           <Link to="/pricing" className="hidden sm:block px-3 py-1.5 rounded-md text-muted-foreground hover:text-foreground" activeProps={{ className: "text-foreground" }}>Pricing</Link>
-          {!ready ? (
-            <div className="w-28 h-7 rounded-md bg-white/5 animate-pulse" />
-          ) : isAuthed ? (
+          {isAuthed ? (
             <>
               <Link to="/dashboard" className="px-3 py-1.5 rounded-md text-muted-foreground hover:text-foreground inline-flex items-center gap-1.5" activeProps={{ className: "text-foreground" }}>
                 <LayoutDashboard className="h-4 w-4" /> Dashboard
