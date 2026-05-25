@@ -1,5 +1,5 @@
 import { createMiddleware } from '@tanstack/react-start'
-import { getRequest } from '@tanstack/react-start/server'
+import { getWebRequest } from '@tanstack/react-start/server'
 import { createClient } from '@supabase/supabase-js'
 import type { Database } from './types'
 
@@ -14,7 +14,7 @@ export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server
       throw new Error('Missing Supabase environment variables.');
     }
 
-    const request = getRequest();
+    const request = getWebRequest();
 
     if (!request?.headers) {
       throw new Error('Unauthorized: No request headers available');
@@ -31,7 +31,6 @@ export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server
       throw new Error('Unauthorized: Empty token');
     }
 
-    // Create a per-request Supabase client that passes the user's JWT
     const supabase = createClient<Database>(
       SUPABASE_URL,
       SUPABASE_PUBLISHABLE_KEY,
@@ -49,7 +48,6 @@ export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server
       }
     );
 
-    // Validate the JWT against Supabase — returns the authenticated user
     const { data: { user }, error } = await supabase.auth.getUser(token);
 
     if (error || !user) {
