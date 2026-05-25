@@ -2,8 +2,8 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
 // ── Groq configuration ──────────────────────────────────────────────────────
-const TEXT_MODEL   = "llama-3.3-70b";
-const VISION_MODEL = "llama-4-scout";
+const TEXT_MODEL   = "llama-3.3-70b-versatile";
+const VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
 const GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions";
 const TIMEOUT_MS   = 120_000;
 
@@ -29,8 +29,9 @@ const ImageInputSchema = z.object({
 });
 
 // ── System / user prompts ────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `You are a precise document extraction engine.
-Given document content (text or image), extract the most likely structured fields and return ONLY valid JSON matching this exact TypeScript type:
+const SYSTEM_PROMPT = `You are a precise invoice and document data extraction engine.
+
+Your task: Extract structured fields from the document and return ONLY valid JSON matching this exact TypeScript type:
 
 type Row = {
   invoiceNumber: { v: string; c: number };
@@ -41,12 +42,19 @@ type Row = {
   total:         { v: string; c: number };
 };
 
-Rules:
-- "v" is the extracted string value. Use "—" if missing.
-- "c" is your confidence 0-100 for that field.
-- Output ONLY the raw JSON object. No prose, no markdown, no code fences.
-- Currency values should include the symbol if present.
-- Dates should be ISO YYYY-MM-DD when possible.`;
+Extraction rules:
+- "v" is the FULL exact string value as it appears in the document. NEVER truncate, shorten, abbreviate, or paraphrase any text, number, or company name.
+- "c" is your confidence score 0-100 for that field.
+- invoiceNumber: the invoice/receipt/order number (e.g. "INV-2024-00123").
+- client: the full legal name of the buyer/customer/bill-to party exactly as written.
+- date: the invoice date in ISO YYYY-MM-DD format when possible; otherwise copy the exact date string from the document.
+- amount: the subtotal/net amount before tax, including the currency symbol if present (e.g. "$1,250.00").
+- tax: the tax/VAT/GST amount including currency symbol if present; use "—" only if truly absent.
+- total: the grand total including tax, including the currency symbol if present.
+- If a field is genuinely not found in the document, set "v" to "—" and "c" to 0.
+- Output ONLY the raw JSON object. No prose, no markdown, no code fences, no explanation.`;
+
+const USER_SUFFIX = `\n\nIMPORTANT: Do not truncate any text, numbers, or company names. Copy every value exactly as it appears in the document, character by character.`;
 
 // ── Low-level fetch helper ───────────────────────────────────────────────────
 async function callGroq(
@@ -149,7 +157,7 @@ async function runWithRetry(
   return { ok: false, error: `${lastError} Please try again.` };
 }
 
-// ── Server function: text extraction (llama-3.3-70b) ─────────────────────────
+// ── Server function: text extraction (llama-3.3-70b-versatile) ───────────────
 export const extractFromText = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => TextInputSchema.parse(d))
   .handler(async ({ data }) => {
@@ -164,17 +172,20 @@ export const extractFromText = createServerFn({ method: "POST" })
       model: TEXT_MODEL,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user",   content: `Document: ${data.fileName}\n\n---\n${data.text.slice(0, 80_000)}` },
+        {
+          role: "user",
+          content: `Document filename: ${data.fileName}\n\n---\n${data.text.slice(0, 80_000)}${USER_SUFFIX}`,
+        },
       ],
-      temperature:     0.1,
-      max_tokens:      600,
+      temperature:     0.0,
+      max_tokens:      1024,
       response_format: { type: "json_object" },
     };
 
     return runWithRetry(apiKey, body, TEXT_MODEL);
   });
 
-// ── Server function: vision extraction (llama-4-scout) ───────────────────────
+// ── Server function: vision extraction (llama-4-scout-17b) ───────────────────
 export const extractFromImage = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => ImageInputSchema.parse(d))
   .handler(async ({ data }) => {
@@ -193,13 +204,13 @@ export const extractFromImage = createServerFn({ method: "POST" })
             },
             {
               type: "text",
-              text:  `${SYSTEM_PROMPT}\n\nDocument filename: ${data.fileName}\n\nExtract all relevant fields from this document image and return ONLY the JSON object.`,
+              text: `${SYSTEM_PROMPT}\n\nDocument filename: ${data.fileName}\n\nExtract all relevant fields from this document image and return ONLY the JSON object.${USER_SUFFIX}`,
             },
           ],
         },
       ],
-      temperature: 0.1,
-      max_tokens:  600,
+      temperature: 0.0,
+      max_tokens:  1024,
     };
 
     return runWithRetry(apiKey, body, VISION_MODEL);
