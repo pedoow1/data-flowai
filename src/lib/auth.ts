@@ -1,6 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { supabase } from "@/integrations/supabase/client";
-import { ADMIN_EMAIL } from "./config";
+import { getMe } from "./auth.functions";
 
 export type LogEntry = { ts: number; type: string; detail: string };
 export function logEvent(_type: string, _detail: string) {}
@@ -11,66 +10,43 @@ export function useAuth() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [ready, setReady] = useState(false);
 
-  const refreshRole = useCallback(async (uid: string | null, mail: string | null) => {
-    if (!uid) { setIsAdmin(false); return; }
-    if (mail && mail.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
-      setIsAdmin(true);
-      return;
+  const refresh = useCallback(async () => {
+    try {
+      const session = await getMe();
+      if (session) {
+        setUserId(session.userId);
+        setEmail(session.email);
+        setIsAdmin(session.isAdmin);
+      } else {
+        setUserId(null);
+        setEmail(null);
+        setIsAdmin(false);
+      }
+    } catch {
+      setUserId(null);
+      setEmail(null);
+      setIsAdmin(false);
+    } finally {
+      setReady(true);
     }
-    const { data } = await supabase
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", uid)
-      .eq("role", "admin")
-      .maybeSingle();
-    setIsAdmin(!!data);
   }, []);
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      const u = session?.user ?? null;
-      setUserId(u?.id ?? null);
-      setEmail(u?.email ?? null);
-      setTimeout(() => { void refreshRole(u?.id ?? null, u?.email ?? null); }, 0);
-    });
+    void refresh();
+  }, [refresh]);
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      const u = session?.user ?? null;
-      setUserId(u?.id ?? null);
-      setEmail(u?.email ?? null);
-      void refreshRole(u?.id ?? null, u?.email ?? null).finally(() => setReady(true));
-    });
-
-    return () => subscription.unsubscribe();
-  }, [refreshRole]);
-
-  const signup = useCallback(async (e: string, password: string): Promise<{ ok: boolean; error?: string }> => {
-    const normalized = e.trim().toLowerCase();
-    if (!/^\S+@\S+\.\S+$/.test(normalized)) return { ok: false, error: "Enter a valid email address." };
-    if (password.length < 6) return { ok: false, error: "Password must be at least 6 characters." };
-    const { error } = await supabase.auth.signUp({
-      email: normalized,
-      password,
-      options: { emailRedirectTo: typeof window !== "undefined" ? window.location.origin : undefined },
-    });
-    if (error) {
-      if (/registered|already/i.test(error.message)) {
-        return { ok: false, error: "An account with this email already exists. Try signing in." };
-      }
-      return { ok: false, error: error.message };
-    }
+  const login = useCallback(async (_e: string, _password: string): Promise<{ ok: boolean; error?: string }> => {
+    window.location.href = "/__replauthuser";
     return { ok: true };
   }, []);
 
-  const login = useCallback(async (e: string, password: string): Promise<{ ok: boolean; error?: string }> => {
-    const normalized = e.trim().toLowerCase();
-    const { error } = await supabase.auth.signInWithPassword({ email: normalized, password });
-    if (error) return { ok: false, error: "Incorrect email or password." };
+  const signup = useCallback(async (_e: string, _password: string): Promise<{ ok: boolean; error?: string }> => {
+    window.location.href = "/__replauthuser";
     return { ok: true };
   }, []);
 
   const logout = useCallback(async () => {
-    await supabase.auth.signOut();
+    window.location.href = "/__replauthuser";
   }, []);
 
   return { email, userId, isAdmin, isAuthed: !!userId, ready, login, signup, logout };
