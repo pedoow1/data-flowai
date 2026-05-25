@@ -1,11 +1,11 @@
 import { createMiddleware } from "@tanstack/react-start";
-import { getWebRequest } from "@tanstack/react-start/server";
+import { getRequest } from "@tanstack/react-start/server";
 import { getSession } from "./session";
 
 export const requireAuth = createMiddleware({ type: "function" }).server(
   async ({ next }) => {
-    const request = getWebRequest();
-    const session = await getSession(request);
+    const request = getRequest();
+    const session = await getSession(request as unknown as Request);
 
     if (!session?.userId) {
       throw new Error("Unauthorized");

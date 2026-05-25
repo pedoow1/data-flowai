@@ -44,7 +44,7 @@ export async function pdfPageToImageDataUrl(
   ctx.fillStyle  = "#ffffff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  await page.render({ canvasContext: ctx, viewport: scaled }).promise;
+  await page.render({ canvasContext: ctx, canvas, viewport: scaled } as any).promise;
   return canvas.toDataURL("image/jpeg", 0.88);
 }
 

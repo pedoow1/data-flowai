@@ -1,5 +1,4 @@
-import pkg from "@replit/repl-auth";
-const { getUserIdentity } = pkg;
+import { getUserInfo } from "@replit/repl-auth";
 import { db } from "./db";
 import { profiles, userRoles, subscriptions } from "../shared/schema";
 import { eq, and } from "drizzle-orm";
@@ -12,17 +11,17 @@ export type SessionUser = {
 };
 
 export async function getSession(request: Request): Promise<SessionUser | null> {
-  let identity: { id: string; name: string; bio?: string; url?: string } | null = null;
+  let identity: { id?: string; name?: string } | null = null;
   try {
-    identity = getUserIdentity(request as any);
+    identity = getUserInfo(request as any);
   } catch {
     return null;
   }
 
-  if (!identity) return null;
+  if (!identity?.id) return null;
 
   const userId = identity.id;
-  const email = identity.name;
+  const email = identity.name ?? userId;
 
   const isAdmin = email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 

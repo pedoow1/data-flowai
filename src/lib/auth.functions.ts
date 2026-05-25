@@ -1,10 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
-import { getWebRequest } from "@tanstack/react-start/server";
+import { getRequest } from "@tanstack/react-start/server";
 import { getSession } from "@server/session";
 
 export const getMe = createServerFn({ method: "GET" }).handler(async () => {
-  const request = getWebRequest();
-  const session = await getSession(request);
+  const request = getRequest();
+  const session = await getSession(request as unknown as Request);
   if (!session) return null;
   return session;
 });
