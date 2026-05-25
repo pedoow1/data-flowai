@@ -30,12 +30,8 @@ export function Header() {
             </>
           ) : (
             <>
-              <a href="/api/auth/login" className="px-3 py-1.5 rounded-md text-muted-foreground hover:text-foreground text-sm">
-                Sign in
-              </a>
-              <a href="/api/auth/login" className="px-4 py-1.5 rounded-md bg-lime text-primary-foreground text-sm font-semibold hover:opacity-90">
-                Sign up
-              </a>
+              <Link to="/login" className="px-3 py-1.5 rounded-md text-muted-foreground hover:text-foreground text-sm">Sign in</Link>
+              <Link to="/signup" className="px-4 py-1.5 rounded-md bg-lime text-primary-foreground text-sm font-semibold hover:opacity-90">Sign up</Link>
             </>
           )}
         </nav>

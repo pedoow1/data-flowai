@@ -1,28 +1,70 @@
-import { createMiddleware } from "@tanstack/react-start";
-import { getWebRequest } from "@tanstack/react-start/server";
-import { getSession } from "@server/session";
+import { createMiddleware } from '@tanstack/react-start'
+import { getRequest } from '@tanstack/react-start/server'
+import { createClient } from '@supabase/supabase-js'
+import type { Database } from './types'
 
-// Legacy alias — prefer importing requireAuth from @server/auth directly.
-export const requireSupabaseAuth = createMiddleware({ type: "function" }).server(
+export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server(
   async ({ next }) => {
-    const request = getWebRequest();
-    const session = await getSession(request as Request);
+    const SUPABASE_URL = process.env.SUPABASE_URL;
+    const SUPABASE_PUBLISHABLE_KEY =
+      process.env.SUPABASE_PUBLISHABLE_KEY ||
+      process.env.SUPABASE_ANON_KEY;
 
-    if (!session?.userId) {
-      throw new Error("Unauthorized");
+    if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
+      throw new Error('Missing Supabase environment variables.');
+    }
+
+    const request = getRequest();
+
+    if (!request?.headers) {
+      throw new Error('Unauthorized: No request headers available');
+    }
+
+    const authHeader = request.headers.get('authorization');
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      throw new Error('Unauthorized: No bearer token provided');
+    }
+
+    const token = authHeader.replace('Bearer ', '').trim();
+    if (!token) {
+      throw new Error('Unauthorized: Empty token');
+    }
+
+    // Create a per-request Supabase client that passes the user's JWT
+    const supabase = createClient<Database>(
+      SUPABASE_URL,
+      SUPABASE_PUBLISHABLE_KEY,
+      {
+        global: {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+        auth: {
+          storage: undefined,
+          persistSession: false,
+          autoRefreshToken: false,
+        },
+      }
+    );
+
+    // Validate the JWT against Supabase — returns the authenticated user
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+
+    if (error || !user) {
+      throw new Error('Unauthorized: Invalid or expired token');
     }
 
     return next({
       context: {
-        supabase: null,
-        userId: session.userId,
-        email: session.email,
-        isAdmin: session.isAdmin,
+        supabase,
+        userId: user.id,
         claims: {
-          sub: session.userId,
-          email: session.email,
+          sub: user.id,
+          email: user.email,
         },
       },
     });
-  }
+  },
 );

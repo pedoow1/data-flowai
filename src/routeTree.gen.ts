@@ -18,8 +18,6 @@ import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiPublicGumroadWebhookRouteImport } from './routes/api/public/gumroad-webhook'
-import { Route as ApiAuthMeRouteImport } from './routes/api/auth/me'
-import { Route as ApiAuthLoginRouteImport } from './routes/api/auth/login'
 
 const TermsRoute = TermsRouteImport.update({
   id: '/terms',
@@ -66,16 +64,6 @@ const ApiPublicGumroadWebhookRoute = ApiPublicGumroadWebhookRouteImport.update({
   path: '/api/public/gumroad-webhook',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiAuthMeRoute = ApiAuthMeRouteImport.update({
-  id: '/api/auth/me',
-  path: '/api/auth/me',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiAuthLoginRoute = ApiAuthLoginRouteImport.update({
-  id: '/api/auth/login',
-  path: '/api/auth/login',
-  getParentRoute: () => rootRouteImport,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -86,8 +74,6 @@ export interface FileRoutesByFullPath {
   '/privacy': typeof PrivacyRoute
   '/signup': typeof SignupRoute
   '/terms': typeof TermsRoute
-  '/api/auth/login': typeof ApiAuthLoginRoute
-  '/api/auth/me': typeof ApiAuthMeRoute
   '/api/public/gumroad-webhook': typeof ApiPublicGumroadWebhookRoute
 }
 export interface FileRoutesByTo {
@@ -99,8 +85,6 @@ export interface FileRoutesByTo {
   '/privacy': typeof PrivacyRoute
   '/signup': typeof SignupRoute
   '/terms': typeof TermsRoute
-  '/api/auth/login': typeof ApiAuthLoginRoute
-  '/api/auth/me': typeof ApiAuthMeRoute
   '/api/public/gumroad-webhook': typeof ApiPublicGumroadWebhookRoute
 }
 export interface FileRoutesById {
@@ -113,8 +97,6 @@ export interface FileRoutesById {
   '/privacy': typeof PrivacyRoute
   '/signup': typeof SignupRoute
   '/terms': typeof TermsRoute
-  '/api/auth/login': typeof ApiAuthLoginRoute
-  '/api/auth/me': typeof ApiAuthMeRoute
   '/api/public/gumroad-webhook': typeof ApiPublicGumroadWebhookRoute
 }
 export interface FileRouteTypes {
@@ -128,8 +110,6 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/signup'
     | '/terms'
-    | '/api/auth/login'
-    | '/api/auth/me'
     | '/api/public/gumroad-webhook'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -141,8 +121,6 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/signup'
     | '/terms'
-    | '/api/auth/login'
-    | '/api/auth/me'
     | '/api/public/gumroad-webhook'
   id:
     | '__root__'
@@ -154,8 +132,6 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/signup'
     | '/terms'
-    | '/api/auth/login'
-    | '/api/auth/me'
     | '/api/public/gumroad-webhook'
   fileRoutesById: FileRoutesById
 }
@@ -168,8 +144,6 @@ export interface RootRouteChildren {
   PrivacyRoute: typeof PrivacyRoute
   SignupRoute: typeof SignupRoute
   TermsRoute: typeof TermsRoute
-  ApiAuthLoginRoute: typeof ApiAuthLoginRoute
-  ApiAuthMeRoute: typeof ApiAuthMeRoute
   ApiPublicGumroadWebhookRoute: typeof ApiPublicGumroadWebhookRoute
 }
 
@@ -238,20 +212,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicGumroadWebhookRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/auth/me': {
-      id: '/api/auth/me'
-      path: '/api/auth/me'
-      fullPath: '/api/auth/me'
-      preLoaderRoute: typeof ApiAuthMeRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/auth/login': {
-      id: '/api/auth/login'
-      path: '/api/auth/login'
-      fullPath: '/api/auth/login'
-      preLoaderRoute: typeof ApiAuthLoginRouteImport
-      parentRoute: typeof rootRouteImport
-    }
   }
 }
 
@@ -264,8 +224,6 @@ const rootRouteChildren: RootRouteChildren = {
   PrivacyRoute: PrivacyRoute,
   SignupRoute: SignupRoute,
   TermsRoute: TermsRoute,
-  ApiAuthLoginRoute: ApiAuthLoginRoute,
-  ApiAuthMeRoute: ApiAuthMeRoute,
   ApiPublicGumroadWebhookRoute: ApiPublicGumroadWebhookRoute,
 }
 export const routeTree = rootRouteImport

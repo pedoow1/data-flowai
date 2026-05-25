@@ -11,6 +11,11 @@ channel = "stable-25_05"
 
 [userenv.shared]
 GROQ_API_KEY = "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"
+SUPABASE_URL = "https://mklxsjmwhiigjrocehll.supabase.co"
+SUPABASE_PUBLISHABLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1rbHhzam13aGlpZ2pyb2NlaGxsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MjkzOTgsImV4cCI6MjA5NTEwNTM5OH0.oqn0z1-SmkpMIL42SUqduQFwc7ltGKLPvZBhEV5By8E"
+VITE_SUPABASE_URL = "https://mklxsjmwhiigjrocehll.supabase.co"
+VITE_SUPABASE_PUBLISHABLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1rbHhzam13aGlpZ2pyb2NlaGxsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MjkzOTgsImV4cCI6MjA5NTEwNTM5OH0.oqn0z1-SmkpMIL42SUqduQFwc7ltGKLPvZBhEV5By8E"
+VITE_SUPABASE_PROJECT_ID = "mklxsjmwhiigjrocehll"
 
 [workflows]
 runButton = "Project"
