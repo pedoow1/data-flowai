@@ -1,24 +1,33 @@
-// Stub: Supabase has been replaced with Replit Auth + PostgreSQL.
-// This file exists only to satisfy any remaining imports during migration.
-// Do not add new imports from this file.
+import { createClient } from '@supabase/supabase-js';
+import type { Database } from './types';
 
-export const supabase = {
-  auth: {
-    onAuthStateChange: (_event: unknown, _session: unknown) => {
-      return { data: { subscription: { unsubscribe: () => {} } } };
-    },
-    getSession: async () => ({ data: { session: null } }),
-    signUp: async () => ({ error: new Error("Use Replit Auth") }),
-    signInWithPassword: async () => ({ error: new Error("Use Replit Auth") }),
-    signOut: async () => {},
-    getClaims: async () => ({ data: null, error: new Error("Use Replit Auth") }),
-    setSession: async () => ({ data: null, error: null }),
+function createSupabaseClient() {
+  const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+  const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY;
+
+  if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
+    const missing = [
+      ...(!SUPABASE_URL ? ['SUPABASE_URL'] : []),
+      ...(!SUPABASE_PUBLISHABLE_KEY ? ['SUPABASE_PUBLISHABLE_KEY'] : []),
+    ];
+    console.error(`[Supabase] Missing env vars: ${missing.join(', ')}`);
+    throw new Error(`Missing Supabase environment variable(s): ${missing.join(', ')}.`);
+  }
+
+  return createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+    auth: {
+      storage: typeof window !== 'undefined' ? localStorage : undefined,
+      persistSession: true,
+      autoRefreshToken: true,
+    }
+  });
+}
+
+let _supabase: ReturnType<typeof createSupabaseClient> | undefined;
+
+export const supabase = new Proxy({} as ReturnType<typeof createSupabaseClient>, {
+  get(_, prop, receiver) {
+    if (!_supabase) _supabase = createSupabaseClient();
+    return Reflect.get(_supabase, prop, receiver);
   },
-  from: (_table: string) => ({
-    select: (_cols?: string) => ({
-      eq: () => ({ maybeSingle: async () => ({ data: null }) }),
-    }),
-    insert: async () => ({ error: null }),
-    upsert: async () => ({ error: null }),
-  }),
-};
+});
