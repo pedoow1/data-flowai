@@ -3,22 +3,20 @@ import { supabase } from './client'
 
 export const attachSupabaseAuth = createMiddleware({ type: 'function' }).client(
   async ({ next }) => {
-    // getUser() makes a server-side call to Supabase and always returns a
-    // fresh, validated session — it also triggers token refresh if needed.
-    // Falls back to getSession() for offline / network-error cases.
+    // Calling getUser() first ensures the token is refreshed if it's close
+    // to expiry (Supabase auto-refreshes the session when autoRefreshToken is true).
+    // Then getSession() returns the (possibly renewed) access_token.
     let token: string | undefined;
     try {
-      const { data: userData } = await supabase.auth.getUser();
-      if (userData.user) {
-        const { data: sessionData } = await supabase.auth.getSession();
-        token = sessionData.session?.access_token;
-      }
+      await supabase.auth.getUser();
+      const { data } = await supabase.auth.getSession();
+      token = data.session?.access_token;
     } catch {
       const { data } = await supabase.auth.getSession();
       token = data.session?.access_token;
     }
     return next({
       headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
+    });
   },
 )

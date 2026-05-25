@@ -1,7 +1,23 @@
 import { createMiddleware } from '@tanstack/react-start'
-import { getWebRequest } from '@tanstack/react-start/server'
+import { getRequest } from '@tanstack/react-start/server'
 import { createClient } from '@supabase/supabase-js'
 import type { Database } from './types'
+
+function decodeJWT(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const decoded = JSON.parse(
+      typeof atob !== 'undefined'
+        ? atob(payload)
+        : Buffer.from(payload, 'base64').toString('utf-8')
+    );
+    return decoded;
+  } catch {
+    return null;
+  }
+}
 
 export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server(
   async ({ next }) => {
@@ -14,7 +30,7 @@ export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server
       throw new Error('Missing Supabase environment variables.');
     }
 
-    const request = getWebRequest();
+    const request = getRequest();
 
     if (!request?.headers) {
       throw new Error('Unauthorized: No request headers available');
@@ -31,6 +47,27 @@ export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server
       throw new Error('Unauthorized: Empty token');
     }
 
+    // Decode JWT locally — no extra network call to Supabase needed.
+    // Supabase access tokens are signed JWTs; we decode the payload to extract
+    // user info and verify expiration without needing the JWT secret.
+    const payload = decodeJWT(token);
+    if (!payload) {
+      throw new Error('Unauthorized: Malformed token');
+    }
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (typeof payload.exp === 'number' && payload.exp < nowSec) {
+      throw new Error('Unauthorized: Token has expired');
+    }
+
+    const userId = (payload.sub as string) || null;
+    const email = (payload.email as string) || null;
+
+    if (!userId) {
+      throw new Error('Unauthorized: No user ID in token');
+    }
+
+    // Build a Supabase client that carries the user's JWT for RLS-aware queries.
     const supabase = createClient<Database>(
       SUPABASE_URL,
       SUPABASE_PUBLISHABLE_KEY,
@@ -48,19 +85,13 @@ export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server
       }
     );
 
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-
-    if (error || !user) {
-      throw new Error('Unauthorized: Invalid or expired token');
-    }
-
     return next({
       context: {
         supabase,
-        userId: user.id,
+        userId,
         claims: {
-          sub: user.id,
-          email: user.email,
+          sub: userId,
+          email,
         },
       },
     });
