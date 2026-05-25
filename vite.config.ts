@@ -13,6 +13,10 @@ export default defineConfig({
     tailwindcss(),
     tsconfigPaths(),
   ],
+  define: {
+    "import.meta.env.VITE_SUPABASE_URL": JSON.stringify(process.env.SUPABASE_URL ?? ""),
+    "import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY": JSON.stringify(process.env.SUPABASE_PUBLISHABLE_KEY ?? ""),
+  },
   server: {
     host: "0.0.0.0",
     port: 5000,
