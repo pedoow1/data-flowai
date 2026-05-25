@@ -3,7 +3,7 @@ import { z } from "zod";
 
 // ── Groq configuration ──────────────────────────────────────────────────────
 const TEXT_MODEL   = "llama-3.3-70b-versatile";
-const VISION_MODEL = "llama-4-scout-17b-16e-instruct";
+const VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
 const GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions";
 const TIMEOUT_MS   = 120_000;
 
