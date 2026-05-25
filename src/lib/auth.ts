@@ -47,12 +47,21 @@ export function useAuth() {
   }, []);
 
   useEffect(() => {
-    // Listen for future auth state changes (login / logout / token refresh)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      const u = session?.user ?? null;
-      applyUser(u);
-      void refreshRole(u?.id ?? null, u?.email ?? null);
-    });
+    let subscription: { unsubscribe: () => void } | null = null;
+
+    try {
+      // Listen for future auth state changes (login / logout / token refresh)
+      const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+        const u = session?.user ?? null;
+        applyUser(u);
+        void refreshRole(u?.id ?? null, u?.email ?? null);
+      });
+      subscription = data.subscription;
+    } catch {
+      // Supabase not configured in this environment — show logged-out UI
+      setReady(true);
+      return;
+    }
 
     // Hydrate from the stored session once on mount
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -64,7 +73,7 @@ export function useAuth() {
       setReady(true);
     });
 
-    return () => subscription.unsubscribe();
+    return () => subscription?.unsubscribe();
   }, [applyUser, refreshRole]);
 
   const signup = useCallback(async (e: string, password: string): Promise<{ ok: boolean; error?: string }> => {
