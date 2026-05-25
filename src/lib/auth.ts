@@ -1,94 +1,81 @@
-// Supabase-backed auth + role hook.
-// Keeps the same useAuth() shape that the rest of the app already imports.
 import { useEffect, useState, useCallback } from "react";
-import { supabase } from "@/integrations/supabase/client";
 import { ADMIN_EMAIL } from "./config";
 
-// Lightweight no-op event logger kept for backwards compatibility.
-// Real audit logging now lives in the database (uploads, subscriptions, support_tickets).
 export type LogEntry = { ts: number; type: string; detail: string };
-export function logEvent(_type: string, _detail: string) {
-  // intentional no-op
+export function logEvent(_type: string, _detail: string) {}
+
+export type AuthUser = {
+  id: string;
+  name: string;
+  email?: string;
+  profileImage?: string;
+  roles?: string[];
+  bio?: string;
+  url?: string;
+};
+
+let _cachedUser: AuthUser | null | undefined = undefined;
+
+async function fetchCurrentUser(): Promise<AuthUser | null> {
+  if (_cachedUser !== undefined) return _cachedUser;
+  try {
+    const res = await fetch("/__replauthuser");
+    if (!res.ok) { _cachedUser = null; return null; }
+    const data = await res.json();
+    if (!data?.id) { _cachedUser = null; return null; }
+    _cachedUser = data as AuthUser;
+    return _cachedUser;
+  } catch {
+    _cachedUser = null;
+    return null;
+  }
 }
 
 export function useAuth() {
-  const [email, setEmail] = useState<string | null>(null);
-  const [userId, setUserId] = useState<string | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [ready, setReady] = useState(false);
 
-  // Refresh admin role from user_roles table.
-  const refreshRole = useCallback(async (uid: string | null, mail: string | null) => {
-    if (!uid) { setIsAdmin(false); return; }
-    // Fast path: known admin email
-    if (mail && mail.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
-      setIsAdmin(true);
-      return;
-    }
-    const { data } = await supabase
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", uid)
-      .eq("role", "admin")
-      .maybeSingle();
-    setIsAdmin(!!data);
-  }, []);
-
   useEffect(() => {
-    // Listener first, then initial session.
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      const u = session?.user ?? null;
-      setUserId(u?.id ?? null);
-      setEmail(u?.email ?? null);
-      // Defer role lookup to avoid blocking the auth callback.
-      setTimeout(() => { void refreshRole(u?.id ?? null, u?.email ?? null); }, 0);
-    });
-
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      const u = session?.user ?? null;
-      setUserId(u?.id ?? null);
-      setEmail(u?.email ?? null);
-      void refreshRole(u?.id ?? null, u?.email ?? null).finally(() => setReady(true));
-    });
-
-    return () => subscription.unsubscribe();
-  }, [refreshRole]);
-
-  const signup = useCallback(async (e: string, password: string): Promise<{ ok: boolean; error?: string }> => {
-    const normalized = e.trim().toLowerCase();
-    if (!/^\S+@\S+\.\S+$/.test(normalized)) return { ok: false, error: "Enter a valid email address." };
-    if (password.length < 6) return { ok: false, error: "Password must be at least 6 characters." };
-    const { error } = await supabase.auth.signUp({
-      email: normalized,
-      password,
-      options: { emailRedirectTo: typeof window !== "undefined" ? window.location.origin : undefined },
-    });
-    if (error) {
-      if (/registered|already/i.test(error.message)) {
-        return { ok: false, error: "An account with this email already exists. Try signing in." };
+    fetchCurrentUser().then((u) => {
+      setUser(u);
+      if (u) {
+        const email = u.email ?? "";
+        setIsAdmin(email.toLowerCase() === ADMIN_EMAIL.toLowerCase() || (u.roles ?? []).includes("admin"));
       }
-      return { ok: false, error: error.message };
-    }
+      setReady(true);
+    });
+  }, []);
+
+  const logout = useCallback(() => {
+    _cachedUser = undefined;
+    window.location.href = "/__replauth?logout=1";
+  }, []);
+
+  const login = useCallback(async (_e: string, _password: string): Promise<{ ok: boolean; error?: string }> => {
+    window.location.href = "/__replauth";
     return { ok: true };
   }, []);
 
-  const login = useCallback(async (e: string, password: string): Promise<{ ok: boolean; error?: string }> => {
-    const normalized = e.trim().toLowerCase();
-    const { error } = await supabase.auth.signInWithPassword({ email: normalized, password });
-    if (error) return { ok: false, error: "Incorrect email or password." };
+  const signup = useCallback(async (_e: string, _password: string): Promise<{ ok: boolean; error?: string }> => {
+    window.location.href = "/__replauth";
     return { ok: true };
   }, []);
 
-  const logout = useCallback(async () => {
-    await supabase.auth.signOut();
-  }, []);
-
-  return { email, userId, isAdmin, isAuthed: !!userId, ready, login, signup, logout };
+  return {
+    email: user?.email ?? null,
+    userId: user?.id ?? null,
+    isAdmin,
+    isAuthed: !!user,
+    ready,
+    login,
+    signup,
+    logout,
+  };
 }
 
-// Deprecated localStorage analytics — return empty arrays so old admin code compiles.
 export function getLogs(): LogEntry[] { return []; }
 export function getAttempts(): { email: string; ts: number; success: boolean }[] { return []; }
 export function getUsers(): { email: string; createdAt: number }[] { return []; }
 export function getTraffic(): number { return 0; }
-export function bumpTraffic() { /* no-op */ }
+export function bumpTraffic() {}

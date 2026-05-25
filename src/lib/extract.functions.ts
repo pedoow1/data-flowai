@@ -47,7 +47,7 @@ async function callAI(apiKey: string, body: unknown): Promise<{ status: number; 
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://data-flowai.lovable.app",
+        "HTTP-Referer": typeof process !== "undefined" && process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : "https://dataflow-ai.replit.app",
         "X-Title": "DataFlow AI",
       },
       signal: controller.signal,

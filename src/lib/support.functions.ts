@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import { db } from "../../server/db";
+import { supportTickets } from "../../shared/schema";
 
 const Input = z.object({
   name: z.string().trim().min(1).max(120),
@@ -14,17 +15,15 @@ export const sendSupport = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => Input.parse(d))
   .handler(async ({ data }) => {
     let delivered = false;
-    const LOVABLE_API_KEY = process.env.LOVABLE_API_KEY;
     const RESEND_API_KEY = process.env.RESEND_API_KEY;
 
-    if (LOVABLE_API_KEY && RESEND_API_KEY) {
+    if (RESEND_API_KEY) {
       try {
-        const res = await fetch("https://connector-gateway.lovable.dev/resend/emails", {
+        const res = await fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${LOVABLE_API_KEY}`,
-            "X-Connection-Api-Key": RESEND_API_KEY,
+            Authorization: `Bearer ${RESEND_API_KEY}`,
           },
           body: JSON.stringify({
             from: "DataFlow AI Support <onboarding@resend.dev>",
@@ -42,9 +41,8 @@ export const sendSupport = createServerFn({ method: "POST" })
       }
     }
 
-    // Always persist the ticket so the admin can see it in /admin
     try {
-      await supabaseAdmin.from("support_tickets").insert({
+      await db.insert(supportTickets).values({
         name: data.name,
         email: data.email || null,
         message: data.message,

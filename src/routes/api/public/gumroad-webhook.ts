@@ -1,9 +1,8 @@
-// Gumroad webhook receiver — updates a user's subscription plan.
-// Gumroad "ping" sends form-encoded body. We verify a shared secret passed
-// either as ?secret= query param or x-webhook-secret header.
 import { createFileRoute } from "@tanstack/react-router";
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
-import { GUMROAD_PRODUCT_TO_PLAN, type Plan } from "@/lib/config";
+import { db } from "../../../../server/db";
+import { profiles, subscriptions, pendingSubscriptions } from "../../../../shared/schema";
+import { eq, ilike } from "drizzle-orm";
+import { GUMROAD_PRODUCT_TO_PLAN, type Plan } from "../../../lib/config";
 
 export const Route = createFileRoute("/api/public/gumroad-webhook")({
   server: {
@@ -24,7 +23,6 @@ export const Route = createFileRoute("/api/public/gumroad-webhook")({
           return new Response("Unauthorized", { status: 401 });
         }
 
-        // Gumroad sends application/x-www-form-urlencoded
         const raw = await request.text();
         const params = new URLSearchParams(raw);
         const event = (params.get("resource_name") || params.get("event") || "sale").toLowerCase();
@@ -38,7 +36,6 @@ export const Route = createFileRoute("/api/public/gumroad-webhook")({
           return new Response("Missing email", { status: 400 });
         }
 
-        // Determine new plan
         let newPlan: Plan = "free";
         const isCancel = /cancel|refund|end|dispute|fail/.test(event);
         if (isCancel) {
@@ -50,39 +47,57 @@ export const Route = createFileRoute("/api/public/gumroad-webhook")({
           }
         }
 
-        // Find profile by email
-        const { data: profile } = await supabaseAdmin
-          .from("profiles")
-          .select("id")
-          .ilike("email", email)
-          .maybeSingle();
+        const profileRows = await db
+          .select({ id: profiles.id })
+          .from(profiles)
+          .where(ilike(profiles.email, email))
+          .limit(1);
 
-        if (profile) {
-          const { error } = await supabaseAdmin
-            .from("subscriptions")
-            .upsert({
-              user_id: profile.id,
-              plan: newPlan,
-              status: isCancel ? "cancelled" : "active",
-              gumroad_sale_id: saleId,
-              gumroad_subscription_id: subId,
-              updated_at: new Date().toISOString(),
-            }, { onConflict: "user_id" });
-          if (error) {
+        if (profileRows.length > 0) {
+          const profileId = profileRows[0].id;
+          try {
+            await db
+              .insert(subscriptions)
+              .values({
+                userId: profileId,
+                plan: newPlan,
+                status: isCancel ? "cancelled" : "active",
+                gumroadSaleId: saleId ?? null,
+                gumroadSubscriptionId: subId ?? null,
+                updatedAt: new Date(),
+              })
+              .onConflictDoUpdate({
+                target: subscriptions.userId,
+                set: {
+                  plan: newPlan,
+                  status: isCancel ? "cancelled" : "active",
+                  gumroadSaleId: saleId ?? null,
+                  gumroadSubscriptionId: subId ?? null,
+                  updatedAt: new Date(),
+                },
+              });
+          } catch (error) {
             console.error("[gumroad] subscription upsert failed:", error);
             return new Response("DB error", { status: 500 });
           }
         } else {
-          // No user yet — store pending so it applies on signup
           if (newPlan !== "free") {
-            await supabaseAdmin.from("pending_subscriptions").upsert({
-              email,
-              plan: newPlan,
-              gumroad_sale_id: saleId,
-              gumroad_subscription_id: subId,
-            });
-          } else {
-            // Cancellation for unknown email — nothing to do
+            await db
+              .insert(pendingSubscriptions)
+              .values({
+                email,
+                plan: newPlan,
+                gumroadSaleId: saleId ?? null,
+                gumroadSubscriptionId: subId ?? null,
+              })
+              .onConflictDoUpdate({
+                target: pendingSubscriptions.email,
+                set: {
+                  plan: newPlan,
+                  gumroadSaleId: saleId ?? null,
+                  gumroadSubscriptionId: subId ?? null,
+                },
+              });
           }
         }
 
