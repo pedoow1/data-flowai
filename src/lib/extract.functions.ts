@@ -139,11 +139,16 @@ async function runWithRetry(
         continue;
       }
       if (status === 401 || status === 403) {
-        return { ok: false, error: "Groq authentication failed (invalid GROQ_API_KEY)." };
+        return { ok: false, error: "Groq authentication failed — check your GROQ_API_KEY in Vercel." };
       }
       if (status === 404) {
         return { ok: false, error: `Groq model not found: ${model}.` };
       }
+      try {
+        const parsed = JSON.parse(bodyText);
+        const msg = parsed?.error?.message || parsed?.message;
+        if (msg) return { ok: false, error: `Groq: ${msg}` };
+      } catch { /* plain text body */ }
       return { ok: false, error: `Groq error (${status}): ${bodyText.slice(0, 200)}` };
     } catch (e: any) {
       const isAbort = e?.name === "AbortError";

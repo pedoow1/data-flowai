@@ -1,9 +1,11 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
+import { useServerFn } from "@tanstack/react-start";
 import { useAuth } from "@/lib/auth";
 import { lovable } from "@/integrations/lovable";
 import { Header } from "@/components/Layout";
 import { PrivacyBadge } from "@/components/Privacy";
+import { sendConfirmationEmail } from "@/lib/email.functions";
 import { UserPlus, ArrowRight, AlertCircle, MailCheck } from "lucide-react";
 
 export const Route = createFileRoute("/signup")({
@@ -13,6 +15,7 @@ export const Route = createFileRoute("/signup")({
 
 function SignupPage() {
   const { signup } = useAuth();
+  const sendEmail = useServerFn(sendConfirmationEmail);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -26,9 +29,23 @@ function SignupPage() {
     if (password !== confirm) { setErr("Passwords do not match."); return; }
     setLoading(true);
     const res = await signup(email, password);
+    if (!res.ok) {
+      setLoading(false);
+      setErr(res.error ?? "Sign up failed.");
+      return;
+    }
+    try {
+      await sendEmail({
+        data: {
+          email: email.trim().toLowerCase(),
+          redirectTo: window.location.origin + "/dashboard",
+        },
+      });
+    } catch {
+      // Email sending failure is non-fatal — Supabase may still send its own
+    }
     setLoading(false);
-    if (res.ok) setSent(true);
-    else setErr(res.error ?? "Sign up failed.");
+    setSent(true);
   };
 
   const googleSignIn = async () => {
@@ -52,7 +69,10 @@ function SignupPage() {
               <MailCheck className="h-12 w-12 text-lime mx-auto mb-3" />
               <h1 className="text-2xl font-bold tracking-tight">Check your email</h1>
               <p className="text-sm text-muted-foreground mt-2">
-                We sent a confirmation link to <span className="text-foreground">{email}</span>. Click it to verify your account, then sign in.
+                We sent a confirmation link to <span className="text-foreground font-medium">{email}</span>. Click it to verify your account, then sign in.
+              </p>
+              <p className="text-xs text-muted-foreground mt-3">
+                Didn't receive it? Check your spam folder.
               </p>
               <Link to="/login" className="mt-5 inline-block text-sm text-lime hover:underline">Back to sign in</Link>
             </div>
