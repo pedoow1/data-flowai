@@ -22,11 +22,11 @@ function decodeJWT(token: string): Record<string, unknown> | null {
 export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server(
   async ({ next }) => {
     const SUPABASE_URL = process.env.SUPABASE_URL;
-    const SUPABASE_PUBLISHABLE_KEY =
-      process.env.SUPABASE_PUBLISHABLE_KEY ||
-      process.env.SUPABASE_ANON_KEY;
+    const SUPABASE_ANON_KEY =
+      process.env.SUPABASE_ANON_KEY ||
+      process.env.SUPABASE_PUBLISHABLE_KEY;
 
-    if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
       throw new Error('Missing Supabase environment variables.');
     }
 
@@ -48,8 +48,6 @@ export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server
     }
 
     // Decode JWT locally — no extra network call to Supabase needed.
-    // Supabase access tokens are signed JWTs; we decode the payload to extract
-    // user info and verify expiration without needing the JWT secret.
     const payload = decodeJWT(token);
     if (!payload) {
       throw new Error('Unauthorized: Malformed token');
@@ -70,7 +68,7 @@ export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server
     // Build a Supabase client that carries the user's JWT for RLS-aware queries.
     const supabase = createClient<Database>(
       SUPABASE_URL,
-      SUPABASE_PUBLISHABLE_KEY,
+      SUPABASE_ANON_KEY,
       {
         global: {
           headers: {

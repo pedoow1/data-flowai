@@ -2,8 +2,8 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
 // ── Groq configuration ──────────────────────────────────────────────────────
-const TEXT_MODEL   = "llama-3.3-70b-versatile";
-const VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
+const TEXT_MODEL   = "llama-3.3-70b";
+const VISION_MODEL = "llama-4-scout";
 const GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions";
 const TIMEOUT_MS   = 120_000;
 
@@ -157,7 +157,7 @@ async function runWithRetry(
   return { ok: false, error: `${lastError} Please try again.` };
 }
 
-// ── Server function: text extraction (llama-3.3-70b-versatile) ───────────────
+// ── Server function: text extraction (llama-3.3-70b) ─────────────────────────
 export const extractFromText = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => TextInputSchema.parse(d))
   .handler(async ({ data }) => {
@@ -185,7 +185,7 @@ export const extractFromText = createServerFn({ method: "POST" })
     return runWithRetry(apiKey, body, TEXT_MODEL);
   });
 
-// ── Server function: vision extraction (llama-4-scout-17b) ───────────────────
+// ── Server function: vision extraction (llama-4-scout) ───────────────────────
 export const extractFromImage = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => ImageInputSchema.parse(d))
   .handler(async ({ data }) => {
