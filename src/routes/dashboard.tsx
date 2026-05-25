@@ -232,7 +232,8 @@ function Dashboard() {
                 usage={usage}
                 onUpgrade={() => setUpgrade(true)}
                 onPlanChange={async (plan) => {
-                  await changePlan({ data: { plan } });
+                  const res = await changePlan({ data: { plan } }) as { ok: boolean; error?: string };
+                  if (!res.ok) throw new Error(res.error ?? "Server error");
                   await refreshUsage();
                 }}
               />
