@@ -39,11 +39,12 @@ function AdminPage() {
     refetchInterval: 10_000,
   });
 
-  const { data: users, isLoading: usersLoading } = useQuery<AdminUser[]>({
+  const { data: users, isLoading: usersLoading, error: usersError } = useQuery<AdminUser[]>({
     queryKey: ["admin-users"],
     queryFn: () => fetchUsers() as Promise<AdminUser[]>,
     enabled: ready && isAuthed && isAdmin,
     refetchInterval: 30_000,
+    retry: 1,
   });
 
   if (ready && !isAuthed) return <Navigate to="/login" />;
@@ -185,7 +186,13 @@ function AdminPage() {
             </div>
           )}
 
-          {!usersLoading && filtered.length === 0 && (
+          {!usersLoading && usersError && (
+            <div className="px-4 py-6 text-sm text-red-400 font-mono break-all">
+              ⚠ Failed to load users: {(usersError as Error).message}
+            </div>
+          )}
+
+          {!usersLoading && !usersError && filtered.length === 0 && (
             <Empty>{search ? `No users matching "${search}"` : "No users found."}</Empty>
           )}
 
