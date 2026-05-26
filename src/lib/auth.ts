@@ -5,61 +5,17 @@ import { ADMIN_EMAIL } from "./config";
 export type LogEntry = { ts: number; type: string; detail: string };
 export function logEvent(_type: string, _detail: string) {}
 
-// ── Read Supabase session synchronously from localStorage ────────────────────
-// Supabase v2 stores the full session JSON under a key that starts with "sb-"
-// and ends with "-auth-token". Reading it synchronously means we know the user
-// state on the very first render — zero flicker.
-function readStoredSession(): { id: string; email: string | null } | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const key = Object.keys(localStorage).find(
-      (k) => k.startsWith("sb-") && k.endsWith("-auth-token")
-    );
-    if (!key) return null;
-    const raw = localStorage.getItem(key);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    // Supabase v2 wraps the session under different shapes depending on version
-    const user =
-      parsed?.user ??
-      parsed?.currentSession?.user ??
-      parsed?.session?.user ??
-      null;
-    if (!user?.id) return null;
-    return { id: user.id as string, email: (user.email as string | null) ?? null };
-  } catch {
-    return null;
-  }
-}
-
-// Module-level cache — survives re-renders within the same page session
+// Module-level cache so any new Header/component instance starts with the
+// last-known session immediately — no async flash of "Sign in / Sign up".
 let _cachedUserId: string | null = null;
 let _cachedEmail: string | null = null;
 let _cachedIsAdmin: boolean = false;
 
 export function useAuth() {
-  // Initialise synchronously: localStorage first, then module cache
-  const [email, setEmail] = useState<string | null>(() => {
-    const stored = readStoredSession();
-    return stored?.email ?? _cachedEmail;
-  });
-  const [userId, setUserId] = useState<string | null>(() => {
-    const stored = readStoredSession();
-    return stored?.id ?? _cachedUserId;
-  });
+  const [email, setEmail] = useState<string | null>(_cachedEmail);
+  const [userId, setUserId] = useState<string | null>(_cachedUserId);
   const [isAdmin, setIsAdmin] = useState<boolean>(_cachedIsAdmin);
-
-  // If we already have a stored session we're definitely ready — no blank header
-  const [ready, setReady] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    const stored = readStoredSession();
-    if (stored) {
-      _cachedUserId = stored.id;
-      _cachedEmail = stored.email;
-      return true;
-    }
-    return true; // no token = logged out, show Sign in/Sign up immediately
-  });
+  const [ready, setReady] = useState(false);
 
   const applyUser = useCallback((u: { id: string; email?: string | null } | null) => {
     const id = u?.id ?? null;
@@ -91,23 +47,14 @@ export function useAuth() {
   }, []);
 
   useEffect(() => {
-    let subscription: { unsubscribe: () => void } | null = null;
+    // Listen for future auth state changes (login / logout / token refresh)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      const u = session?.user ?? null;
+      applyUser(u);
+      void refreshRole(u?.id ?? null, u?.email ?? null);
+    });
 
-    try {
-      const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-        const u = session?.user ?? null;
-        applyUser(u);
-        setReady(true);
-        void refreshRole(u?.id ?? null, u?.email ?? null);
-      });
-      subscription = data.subscription;
-    } catch {
-      // Supabase not configured in this environment
-      setReady(true);
-      return;
-    }
-
-    // Verify the stored session is still valid (non-blocking)
+    // Hydrate from the stored session once on mount
     supabase.auth.getSession().then(({ data: { session } }) => {
       const u = session?.user ?? null;
       applyUser(u);
@@ -117,7 +64,7 @@ export function useAuth() {
       setReady(true);
     });
 
-    return () => subscription?.unsubscribe();
+    return () => subscription.unsubscribe();
   }, [applyUser, refreshRole]);
 
   const signup = useCallback(async (e: string, password: string): Promise<{ ok: boolean; error?: string }> => {

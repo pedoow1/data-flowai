@@ -25,63 +25,6 @@ export const Route = createFileRoute("/dashboard")({
 type Tab = "extract" | "history" | "settings";
 const HISTORY_KEY = "dataflow_history";
 
-function getFriendlyError(raw: string): { title: string; description: string; retryable: boolean } {
-  if (raw === "__ENCRYPTED_PDF__" || raw.toLowerCase().includes("no suitable key") || raw.toLowerCase().includes("wrong key type")) {
-    return {
-      title: "PDF محمي بكلمة سر",
-      description: "هذا الملف مشفّر ولا يمكن فتحه. جرب تحويله لصورة أولاً أو ارفع ملف PDF آخر.",
-      retryable: false,
-    };
-  }
-  if (raw.toLowerCase().includes("groq_api_key") || raw.toLowerCase().includes("authentication failed")) {
-    return {
-      title: "مشكلة في إعداد الخادم",
-      description: "مفتاح Groq API غير مضبوط. تأكد من وجود GROQ_API_KEY في إعدادات Vercel.",
-      retryable: false,
-    };
-  }
-  if (raw.toLowerCase().includes("rate limit")) {
-    return {
-      title: "تجاوزت الحد المسموح",
-      description: "Groq وصل لحده من الطلبات. انتظر دقيقة ثم أعد المحاولة.",
-      retryable: true,
-    };
-  }
-  if (raw.toLowerCase().includes("unavailable") || raw.toLowerCase().includes("503") || raw.toLowerCase().includes("502")) {
-    return {
-      title: "الخدمة غير متاحة مؤقتاً",
-      description: "Groq تواجه مشكلة الآن. أعد المحاولة بعد لحظات.",
-      retryable: true,
-    };
-  }
-  if (raw.toLowerCase().includes("timed out") || raw.toLowerCase().includes("timeout")) {
-    return {
-      title: "انتهت مهلة المعالجة",
-      description: "استغرق الملف وقتاً أطول من المتوقع. جرب ملفاً أصغر أو أعد المحاولة.",
-      retryable: true,
-    };
-  }
-  if (raw.toLowerCase().includes("model not found")) {
-    return {
-      title: "نموذج AI غير متاح",
-      description: "النموذج المطلوب غير موجود في Groq. تواصل مع الدعم.",
-      retryable: false,
-    };
-  }
-  if (raw.toLowerCase().includes("missing required fields") || raw.toLowerCase().includes("unparseable")) {
-    return {
-      title: "لم يتمكن AI من قراءة المستند",
-      description: "تأكد من أن الملف فاتورة أو إيصال واضح وأعد المحاولة.",
-      retryable: true,
-    };
-  }
-  return {
-    title: "فشل الاستخراج",
-    description: raw.length > 120 ? raw.slice(0, 120) + "…" : raw,
-    retryable: true,
-  };
-}
-
 type Usage = { plan: "free" | "pro" | "team"; used: number; limit: number; remaining: number; unlimited: boolean; isAdmin?: boolean };
 
 function loadHistory(): ExtractedRow[] {
@@ -101,8 +44,6 @@ function Dashboard() {
   const [tab, setTab] = useState<Tab>("extract");
   const [usage, setUsage] = useState<Usage>({ plan: "free", used: 0, limit: 2, remaining: 2, unlimited: false });
   const [lastFile, setLastFile] = useState<File | null>(null);
-  const [debugError, setDebugError] = useState<{ error: string; detail?: string; file: string; ts: string } | null>(null);
-  const [debugOpen, setDebugOpen] = useState(false);
   const extract       = useServerFn(extractFromText);
   const extractVision = useServerFn(extractFromImage);
   const fetchUsage    = useServerFn(getMyUsage);
@@ -155,50 +96,23 @@ function Dashboard() {
         const imageDataUrl = await imageFileToDataUrl(file);
         res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
       } else {
-        // ── PDF → try text first, fall back to vision if scanned or encrypted ──
-        let pdfText = "";
-        let usedVisionFallback = false;
-        try {
-          const extracted = await extractPdfText(file);
-          pages = extracted.pages;
-          pdfText = extracted.text;
-        } catch (pdfErr: unknown) {
-          // Encrypted / password-protected PDF or crypto mismatch → use vision model
-          const msg = pdfErr instanceof Error ? pdfErr.message : String(pdfErr);
-          console.warn("[pdf] text extraction failed, falling back to vision:", msg);
-          usedVisionFallback = true;
-        }
+        // ── PDF → try text first, fall back to vision if scanned ──
+        const extracted = await extractPdfText(file);
+        pages = extracted.pages;
+        res = (await extract({ data: { text: extracted.text, fileName: file.name } })) as AIResult;
 
-        if (usedVisionFallback || pdfText.length < 20) {
-          if (usedVisionFallback) toast.info("Encrypted PDF detected — switching to vision model…");
-          else toast.info("Scanned PDF detected — switching to vision model…");
-          try {
-            const imageDataUrl = await pdfPageToImageDataUrl(file, 1);
-            res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
-          } catch {
-            res = { ok: false, error: "__ENCRYPTED_PDF__" };
-          }
-        } else {
-          res = (await extract({ data: { text: pdfText, fileName: file.name } })) as AIResult;
-          if (!res.ok && res.error === "__NEEDS_VISION__") {
-            toast.info("Scanned PDF detected — switching to vision model…");
-            const imageDataUrl = await pdfPageToImageDataUrl(file, 1);
-            res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
-          }
+        if (!res.ok && res.error === "__NEEDS_VISION__") {
+          toast.info("Scanned PDF detected — switching to vision model…");
+          const imageDataUrl = await pdfPageToImageDataUrl(file, 1);
+          res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
         }
       }
 
       if (!res.ok) {
         track("file_upload_failure", { reason: res.error, pages, duration_ms: Date.now() - started });
-        if (isAdmin) {
-          const d = res as { ok: false; error: string; debugDetail?: string };
-          setDebugError({ error: d.error, detail: d.debugDetail, file: file.name, ts: new Date().toLocaleTimeString() });
-          setDebugOpen(true);
-        }
-        const friendlyMsg = getFriendlyError(res.error);
-        toast.error(friendlyMsg.title, {
-          description: friendlyMsg.description,
-          action: friendlyMsg.retryable ? { label: "Retry", onClick: () => runExtraction(file) } : undefined,
+        toast.error("Extraction failed", {
+          description: res.error,
+          action: { label: "Retry", onClick: () => runExtraction(file) },
         });
         setScanning(false);
         return;
@@ -232,12 +146,11 @@ function Dashboard() {
         toast.warning(`You have ${recorded.usage.remaining} upload${recorded.usage.remaining === 1 ? "" : "s"} remaining today`);
       }
     } catch (e: unknown) {
-      const raw = e instanceof Error ? e.message : "Unknown error";
-      track("file_upload_failure", { reason: raw, duration_ms: Date.now() - started });
-      const friendlyMsg = getFriendlyError(raw);
-      toast.error(friendlyMsg.title, {
-        description: friendlyMsg.description,
-        action: friendlyMsg.retryable ? { label: "Retry", onClick: () => runExtraction(file) } : undefined,
+      const error = e instanceof Error ? e.message : "Unknown error";
+      track("file_upload_failure", { reason: error, duration_ms: Date.now() - started });
+      toast.error("Could not process file", {
+        description: error,
+        action: { label: "Retry", onClick: () => runExtraction(file) },
       });
     } finally {
       setScanning(false);
@@ -284,49 +197,6 @@ function Dashboard() {
                 </div>
 
                 <FileUploader onFiles={onFiles} disabled={scanning} />
-
-                {isAdmin && debugError && (
-                  <div className="mt-4 rounded-xl border border-red-500/40 bg-red-950/30 text-xs font-mono overflow-hidden">
-                    <button
-                      onClick={() => setDebugOpen((o) => !o)}
-                      className="w-full flex items-center justify-between px-4 py-2.5 text-red-400 hover:bg-red-950/50 transition-colors"
-                    >
-                      <span className="flex items-center gap-2">
-                        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                        <span className="font-semibold">Admin Debug · {debugError.file} · {debugError.ts}</span>
-                      </span>
-                      <span className="text-red-500/70">{debugOpen ? "▲ hide" : "▼ show"}</span>
-                    </button>
-                    {debugOpen && (
-                      <div className="px-4 pb-4 space-y-2 border-t border-red-500/20 pt-3">
-                        <div>
-                          <span className="text-red-400/60 uppercase tracking-widest text-[10px]">Error</span>
-                          <p className="text-red-300 mt-0.5 break-all">{debugError.error}</p>
-                        </div>
-                        {debugError.detail && (
-                          <div>
-                            <span className="text-red-400/60 uppercase tracking-widest text-[10px]">Groq Raw Response</span>
-                            <pre className="text-red-200/80 mt-0.5 whitespace-pre-wrap break-all leading-relaxed max-h-48 overflow-y-auto">{debugError.detail}</pre>
-                          </div>
-                        )}
-                        <div className="flex gap-2 pt-1">
-                          <button
-                            onClick={() => navigator.clipboard?.writeText(JSON.stringify(debugError, null, 2))}
-                            className="px-2.5 py-1 rounded bg-red-800/50 text-red-300 hover:bg-red-800 text-[11px]"
-                          >
-                            Copy
-                          </button>
-                          <button
-                            onClick={() => { setDebugError(null); setDebugOpen(false); }}
-                            className="px-2.5 py-1 rounded bg-red-800/50 text-red-300 hover:bg-red-800 text-[11px]"
-                          >
-                            Dismiss
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
 
                 <div className="mt-6 grid lg:grid-cols-2 gap-4">
                   <PdfPreview file={currentFile} />
