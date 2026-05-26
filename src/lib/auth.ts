@@ -5,23 +5,60 @@ import { ADMIN_EMAIL } from "./config";
 export type LogEntry = { ts: number; type: string; detail: string };
 export function logEvent(_type: string, _detail: string) {}
 
-// Module-level cache so any new Header/component instance starts with the
-// last-known session immediately — no async flash of "Sign in / Sign up".
+// ── Read Supabase session synchronously from localStorage ────────────────────
+// Supabase v2 stores the full session JSON under a key that starts with "sb-"
+// and ends with "-auth-token". Reading it synchronously means we know the user
+// state on the very first render — zero flicker.
+function readStoredSession(): { id: string; email: string | null } | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const key = Object.keys(localStorage).find(
+      (k) => k.startsWith("sb-") && k.endsWith("-auth-token")
+    );
+    if (!key) return null;
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    // Supabase v2 wraps the session under different shapes depending on version
+    const user =
+      parsed?.user ??
+      parsed?.currentSession?.user ??
+      parsed?.session?.user ??
+      null;
+    if (!user?.id) return null;
+    return { id: user.id as string, email: (user.email as string | null) ?? null };
+  } catch {
+    return null;
+  }
+}
+
+// Module-level cache — survives re-renders within the same page session
 let _cachedUserId: string | null = null;
 let _cachedEmail: string | null = null;
 let _cachedIsAdmin: boolean = false;
 
 export function useAuth() {
-  const [email, setEmail] = useState<string | null>(_cachedEmail);
-  const [userId, setUserId] = useState<string | null>(_cachedUserId);
+  // Initialise synchronously: localStorage first, then module cache
+  const [email, setEmail] = useState<string | null>(() => {
+    const stored = readStoredSession();
+    return stored?.email ?? _cachedEmail;
+  });
+  const [userId, setUserId] = useState<string | null>(() => {
+    const stored = readStoredSession();
+    return stored?.id ?? _cachedUserId;
+  });
   const [isAdmin, setIsAdmin] = useState<boolean>(_cachedIsAdmin);
+
+  // If we already have a stored session we're definitely ready — no blank header
   const [ready, setReady] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
-    // If no Supabase token in localStorage we're definitely logged out — show buttons immediately
-    const hasToken = Object.keys(localStorage).some(
-      (k) => k.startsWith("sb-") && k.endsWith("-auth-token")
-    );
-    return !hasToken;
+    const stored = readStoredSession();
+    if (stored) {
+      _cachedUserId = stored.id;
+      _cachedEmail = stored.email;
+      return true;
+    }
+    return true; // no token = logged out, show Sign in/Sign up immediately
   });
 
   const applyUser = useCallback((u: { id: string; email?: string | null } | null) => {
@@ -57,20 +94,20 @@ export function useAuth() {
     let subscription: { unsubscribe: () => void } | null = null;
 
     try {
-      // Listen for future auth state changes (login / logout / token refresh)
       const { data } = supabase.auth.onAuthStateChange((_event, session) => {
         const u = session?.user ?? null;
         applyUser(u);
+        setReady(true);
         void refreshRole(u?.id ?? null, u?.email ?? null);
       });
       subscription = data.subscription;
     } catch {
-      // Supabase not configured in this environment — show logged-out UI
+      // Supabase not configured in this environment
       setReady(true);
       return;
     }
 
-    // Hydrate from the stored session once on mount
+    // Verify the stored session is still valid (non-blocking)
     supabase.auth.getSession().then(({ data: { session } }) => {
       const u = session?.user ?? null;
       applyUser(u);
