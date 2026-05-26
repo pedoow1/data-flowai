@@ -72,7 +72,9 @@ export function useAuth() {
     if (!/^\S+@\S+\.\S+$/.test(normalized)) return { ok: false, error: "Enter a valid email address." };
     if (password.length < 6) return { ok: false, error: "Password must be at least 6 characters." };
     
-    // Create user WITHOUT emailRedirectTo (Supabase will handle email confirmation via Resend)
+    // Create user in Supabase without emailRedirectTo
+    // Email verification is handled via Resend OTP in the signup flow
+    // Since Supabase confirm_email is disabled, users are auto-confirmed
     const { data, error } = await supabase.auth.signUp({
       email: normalized,
       password,
@@ -83,26 +85,6 @@ export function useAuth() {
         return { ok: false, error: "An account with this email already exists. Try signing in." };
       }
       return { ok: false, error: error.message };
-    }
-    
-    // Trigger email confirmation via Resend using server endpoint
-    if (data?.user) {
-      try {
-        const response = await fetch("/api/send-verification-email", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            email: normalized,
-            userId: data.user.id,
-          }),
-        });
-        
-        if (!response.ok) {
-          console.warn("Failed to send verification email via Resend");
-        }
-      } catch (err) {
-        console.warn("Error sending verification email:", err);
-      }
     }
     
     return { ok: true };
