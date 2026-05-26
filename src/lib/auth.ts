@@ -72,6 +72,7 @@ export function useAuth() {
     if (!/^\S+@\S+\.\S+$/.test(normalized)) return { ok: false, error: "Enter a valid email address." };
     if (password.length < 6) return { ok: false, error: "Password must be at least 6 characters." };
     
+    // Create user WITHOUT emailRedirectTo (Supabase will handle email confirmation via Resend)
     const { data, error } = await supabase.auth.signUp({
       email: normalized,
       password,
@@ -84,14 +85,23 @@ export function useAuth() {
       return { ok: false, error: error.message };
     }
     
-    // Auto-login after successful signup if session wasn't created
-    if (data?.user && !data.session) {
-      const { error: loginError } = await supabase.auth.signInWithPassword({
-        email: normalized,
-        password,
-      });
-      if (loginError) {
-        return { ok: false, error: "Account created but login failed. Please try signing in." };
+    // Trigger email confirmation via Resend using server endpoint
+    if (data?.user) {
+      try {
+        const response = await fetch("/api/send-verification-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: normalized,
+            userId: data.user.id,
+          }),
+        });
+        
+        if (!response.ok) {
+          console.warn("Failed to send verification email via Resend");
+        }
+      } catch (err) {
+        console.warn("Error sending verification email:", err);
       }
     }
     
