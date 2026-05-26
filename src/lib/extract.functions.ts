@@ -166,8 +166,9 @@ async function runWithRetry(
 export const extractFromText = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => TextInputSchema.parse(d))
   .handler(async ({ data }) => {
-    const apiKey = process.env.GROQ_API_KEY;
+    const apiKey = (process.env.GROQ_API_KEY || "").trim();
     if (!apiKey) return { ok: false as const, error: "Server misconfigured (missing GROQ_API_KEY)." };
+    if (!apiKey.startsWith("gsk_")) return { ok: false as const, error: "Invalid GROQ_API_KEY format — must start with gsk_. Check Vercel environment variables." };
 
     if (data.text.length < 20) {
       return { ok: false as const, error: "__NEEDS_VISION__" };
@@ -194,8 +195,9 @@ export const extractFromText = createServerFn({ method: "POST" })
 export const extractFromImage = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => ImageInputSchema.parse(d))
   .handler(async ({ data }) => {
-    const apiKey = process.env.GROQ_API_KEY;
+    const apiKey = (process.env.GROQ_API_KEY || "").trim();
     if (!apiKey) return { ok: false as const, error: "Server misconfigured (missing GROQ_API_KEY)." };
+    if (!apiKey.startsWith("gsk_")) return { ok: false as const, error: "Invalid GROQ_API_KEY format — must start with gsk_. Check Vercel environment variables." };
 
     const body = {
       model: VISION_MODEL,

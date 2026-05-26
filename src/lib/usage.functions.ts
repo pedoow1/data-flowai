@@ -68,14 +68,20 @@ export const setAdminPlan = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => z.object({ plan: z.enum(["free", "pro", "team"]) }).parse(d))
   .handler(async ({ context, data }) => {
-    const { userId, claims } = context;
-    const isAdminEmail =
-      typeof claims?.email === "string" &&
-      claims.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
-    if (!isAdminEmail) throw new Error("Forbidden");
+    const { supabase, userId, claims } = context;
+    const email = typeof claims?.email === "string" ? claims.email.toLowerCase() : "";
+    const isAdminEmail = email === ADMIN_EMAIL.toLowerCase();
+    if (!isAdminEmail) {
+      const { data: roleData } = await supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", userId)
+        .eq("role", "admin")
+        .maybeSingle();
+      if (!roleData) throw new Error("Forbidden");
+    }
 
-    const admin = getServiceClient();
-    const { error } = await admin
+    const { error } = await supabase
       .from("subscriptions")
       .upsert(
         { user_id: userId, plan: data.plan, status: "active", updated_at: new Date().toISOString() },
