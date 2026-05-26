@@ -25,6 +25,63 @@ export const Route = createFileRoute("/dashboard")({
 type Tab = "extract" | "history" | "settings";
 const HISTORY_KEY = "dataflow_history";
 
+function getFriendlyError(raw: string): { title: string; description: string; retryable: boolean } {
+  if (raw === "__ENCRYPTED_PDF__" || raw.toLowerCase().includes("no suitable key") || raw.toLowerCase().includes("wrong key type")) {
+    return {
+      title: "PDF محمي بكلمة سر",
+      description: "هذا الملف مشفّر ولا يمكن فتحه. جرب تحويله لصورة أولاً أو ارفع ملف PDF آخر.",
+      retryable: false,
+    };
+  }
+  if (raw.toLowerCase().includes("groq_api_key") || raw.toLowerCase().includes("authentication failed")) {
+    return {
+      title: "مشكلة في إعداد الخادم",
+      description: "مفتاح Groq API غير مضبوط. تأكد من وجود GROQ_API_KEY في إعدادات Vercel.",
+      retryable: false,
+    };
+  }
+  if (raw.toLowerCase().includes("rate limit")) {
+    return {
+      title: "تجاوزت الحد المسموح",
+      description: "Groq وصل لحده من الطلبات. انتظر دقيقة ثم أعد المحاولة.",
+      retryable: true,
+    };
+  }
+  if (raw.toLowerCase().includes("unavailable") || raw.toLowerCase().includes("503") || raw.toLowerCase().includes("502")) {
+    return {
+      title: "الخدمة غير متاحة مؤقتاً",
+      description: "Groq تواجه مشكلة الآن. أعد المحاولة بعد لحظات.",
+      retryable: true,
+    };
+  }
+  if (raw.toLowerCase().includes("timed out") || raw.toLowerCase().includes("timeout")) {
+    return {
+      title: "انتهت مهلة المعالجة",
+      description: "استغرق الملف وقتاً أطول من المتوقع. جرب ملفاً أصغر أو أعد المحاولة.",
+      retryable: true,
+    };
+  }
+  if (raw.toLowerCase().includes("model not found")) {
+    return {
+      title: "نموذج AI غير متاح",
+      description: "النموذج المطلوب غير موجود في Groq. تواصل مع الدعم.",
+      retryable: false,
+    };
+  }
+  if (raw.toLowerCase().includes("missing required fields") || raw.toLowerCase().includes("unparseable")) {
+    return {
+      title: "لم يتمكن AI من قراءة المستند",
+      description: "تأكد من أن الملف فاتورة أو إيصال واضح وأعد المحاولة.",
+      retryable: true,
+    };
+  }
+  return {
+    title: "فشل الاستخراج",
+    description: raw.length > 120 ? raw.slice(0, 120) + "…" : raw,
+    retryable: true,
+  };
+}
+
 type Usage = { plan: "free" | "pro" | "team"; used: number; limit: number; remaining: number; unlimited: boolean; isAdmin?: boolean };
 
 function loadHistory(): ExtractedRow[] {
@@ -115,8 +172,12 @@ function Dashboard() {
         if (usedVisionFallback || pdfText.length < 20) {
           if (usedVisionFallback) toast.info("Encrypted PDF detected — switching to vision model…");
           else toast.info("Scanned PDF detected — switching to vision model…");
-          const imageDataUrl = await pdfPageToImageDataUrl(file, 1);
-          res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
+          try {
+            const imageDataUrl = await pdfPageToImageDataUrl(file, 1);
+            res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
+          } catch {
+            res = { ok: false, error: "__ENCRYPTED_PDF__" };
+          }
         } else {
           res = (await extract({ data: { text: pdfText, fileName: file.name } })) as AIResult;
           if (!res.ok && res.error === "__NEEDS_VISION__") {
@@ -134,9 +195,10 @@ function Dashboard() {
           setDebugError({ error: d.error, detail: d.debugDetail, file: file.name, ts: new Date().toLocaleTimeString() });
           setDebugOpen(true);
         }
-        toast.error("Extraction failed", {
-          description: res.error,
-          action: { label: "Retry", onClick: () => runExtraction(file) },
+        const friendlyMsg = getFriendlyError(res.error);
+        toast.error(friendlyMsg.title, {
+          description: friendlyMsg.description,
+          action: friendlyMsg.retryable ? { label: "Retry", onClick: () => runExtraction(file) } : undefined,
         });
         setScanning(false);
         return;
@@ -170,11 +232,12 @@ function Dashboard() {
         toast.warning(`You have ${recorded.usage.remaining} upload${recorded.usage.remaining === 1 ? "" : "s"} remaining today`);
       }
     } catch (e: unknown) {
-      const error = e instanceof Error ? e.message : "Unknown error";
-      track("file_upload_failure", { reason: error, duration_ms: Date.now() - started });
-      toast.error("Could not process file", {
-        description: error,
-        action: { label: "Retry", onClick: () => runExtraction(file) },
+      const raw = e instanceof Error ? e.message : "Unknown error";
+      track("file_upload_failure", { reason: raw, duration_ms: Date.now() - started });
+      const friendlyMsg = getFriendlyError(raw);
+      toast.error(friendlyMsg.title, {
+        description: friendlyMsg.description,
+        action: friendlyMsg.retryable ? { label: "Retry", onClick: () => runExtraction(file) } : undefined,
       });
     } finally {
       setScanning(false);

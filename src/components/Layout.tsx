@@ -3,7 +3,7 @@ import { useAuth } from "@/lib/auth";
 import { LayoutDashboard, LogOut, ShieldCheck } from "lucide-react";
 
 export function Header() {
-  const { isAuthed, isAdmin, logout, email, ready } = useAuth();
+  const { isAuthed, isAdmin, logout, email } = useAuth();
   return (
     <header className="sticky top-0 z-40 backdrop-blur-xl bg-black/60 border-b border-border">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 h-14 flex items-center justify-between">
@@ -14,9 +14,7 @@ export function Header() {
         <nav className="flex items-center gap-1 text-sm">
           <Link to="/" className="hidden sm:block px-3 py-1.5 rounded-md text-muted-foreground hover:text-foreground" activeOptions={{ exact: true }} activeProps={{ className: "text-foreground" }}>Home</Link>
           <Link to="/pricing" className="hidden sm:block px-3 py-1.5 rounded-md text-muted-foreground hover:text-foreground" activeProps={{ className: "text-foreground" }}>Pricing</Link>
-          {!ready ? (
-            <div className="w-28 h-8" />
-          ) : isAuthed ? (
+          {isAuthed ? (
             <>
               <Link to="/dashboard" className="px-3 py-1.5 rounded-md text-muted-foreground hover:text-foreground inline-flex items-center gap-1.5" activeProps={{ className: "text-foreground" }}>
                 <LayoutDashboard className="h-4 w-4" /> Dashboard

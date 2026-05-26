@@ -30,8 +30,9 @@ export const sendConfirmationEmail = createServerFn({ method: "POST" })
     const { data: linkData, error: linkError } = await supabase.auth.admin.generateLink({
       type: "signup",
       email: data.email,
+      password: crypto.randomUUID(),
       options: { redirectTo },
-    });
+    } as any);
 
     if (linkError || !linkData?.properties?.action_link) {
       console.error("[email] generateLink error:", linkError?.message);
