@@ -114,8 +114,9 @@ async function runWithRetry(
   apiKey: string,
   body: unknown,
   model: string,
-): Promise<{ ok: true; row: z.infer<typeof RowSchema> } | { ok: false; error: string }> {
+): Promise<{ ok: true; row: z.infer<typeof RowSchema> } | { ok: false; error: string; debugDetail?: string }> {
   let lastError = "Unknown error";
+  let lastDebug  = "";
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -123,10 +124,11 @@ async function runWithRetry(
 
       if (status === 200) {
         const result = parseGroqResponse(status, bodyText, model);
-        return result ?? { ok: false, error: "Failed to parse response." };
+        return result ?? { ok: false, error: "Failed to parse response.", debugDetail: `model=${model} status=200 body=${bodyText.slice(0, 500)}` };
       }
 
       console.error(`[extract/${model}] Groq ${status}:`, bodyText.slice(0, 400));
+      lastDebug = `model=${model} status=${status} attempt=${attempt} body=${bodyText.slice(0, 600)}`;
 
       if (status === 503 || status === 502 || status === 524) {
         lastError = "Groq is temporarily unavailable.";
@@ -139,27 +141,28 @@ async function runWithRetry(
         continue;
       }
       if (status === 401 || status === 403) {
-        return { ok: false, error: "Groq authentication failed — check your GROQ_API_KEY in Vercel." };
+        return { ok: false, error: "Groq authentication failed — check your GROQ_API_KEY in Vercel.", debugDetail: lastDebug };
       }
       if (status === 404) {
-        return { ok: false, error: `Groq model not found: ${model}.` };
+        return { ok: false, error: `Groq model not found: ${model}.`, debugDetail: lastDebug };
       }
       try {
         const parsed = JSON.parse(bodyText);
         const msg = parsed?.error?.message || parsed?.message;
-        if (msg) return { ok: false, error: `Groq: ${msg}` };
+        if (msg) return { ok: false, error: `Groq: ${msg}`, debugDetail: lastDebug };
       } catch { /* plain text body */ }
-      return { ok: false, error: `Groq error (${status}): ${bodyText.slice(0, 200)}` };
+      return { ok: false, error: `Groq error (${status}): ${bodyText.slice(0, 200)}`, debugDetail: lastDebug };
     } catch (e: any) {
       const isAbort = e?.name === "AbortError";
       lastError = isAbort ? "Extraction timed out." : (e?.message ?? "Network error");
+      lastDebug = `model=${model} fetchError=${lastError}`;
       console.error(`[extract/${model}] fetch failed:`, lastError);
       if (isAbort) break;
       await new Promise((r) => setTimeout(r, 2_000));
     }
   }
 
-  return { ok: false, error: `${lastError} Please try again.` };
+  return { ok: false, error: `${lastError} Please try again.`, debugDetail: lastDebug };
 }
 
 // ── Server function: text extraction (llama-3.3-70b) ─────────────────────────

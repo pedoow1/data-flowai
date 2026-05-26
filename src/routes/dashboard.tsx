@@ -44,6 +44,8 @@ function Dashboard() {
   const [tab, setTab] = useState<Tab>("extract");
   const [usage, setUsage] = useState<Usage>({ plan: "free", used: 0, limit: 2, remaining: 2, unlimited: false });
   const [lastFile, setLastFile] = useState<File | null>(null);
+  const [debugError, setDebugError] = useState<{ error: string; detail?: string; file: string; ts: string } | null>(null);
+  const [debugOpen, setDebugOpen] = useState(false);
   const extract       = useServerFn(extractFromText);
   const extractVision = useServerFn(extractFromImage);
   const fetchUsage    = useServerFn(getMyUsage);
@@ -127,6 +129,11 @@ function Dashboard() {
 
       if (!res.ok) {
         track("file_upload_failure", { reason: res.error, pages, duration_ms: Date.now() - started });
+        if (isAdmin) {
+          const d = res as { ok: false; error: string; debugDetail?: string };
+          setDebugError({ error: d.error, detail: d.debugDetail, file: file.name, ts: new Date().toLocaleTimeString() });
+          setDebugOpen(true);
+        }
         toast.error("Extraction failed", {
           description: res.error,
           action: { label: "Retry", onClick: () => runExtraction(file) },
@@ -214,6 +221,49 @@ function Dashboard() {
                 </div>
 
                 <FileUploader onFiles={onFiles} disabled={scanning} />
+
+                {isAdmin && debugError && (
+                  <div className="mt-4 rounded-xl border border-red-500/40 bg-red-950/30 text-xs font-mono overflow-hidden">
+                    <button
+                      onClick={() => setDebugOpen((o) => !o)}
+                      className="w-full flex items-center justify-between px-4 py-2.5 text-red-400 hover:bg-red-950/50 transition-colors"
+                    >
+                      <span className="flex items-center gap-2">
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                        <span className="font-semibold">Admin Debug · {debugError.file} · {debugError.ts}</span>
+                      </span>
+                      <span className="text-red-500/70">{debugOpen ? "▲ hide" : "▼ show"}</span>
+                    </button>
+                    {debugOpen && (
+                      <div className="px-4 pb-4 space-y-2 border-t border-red-500/20 pt-3">
+                        <div>
+                          <span className="text-red-400/60 uppercase tracking-widest text-[10px]">Error</span>
+                          <p className="text-red-300 mt-0.5 break-all">{debugError.error}</p>
+                        </div>
+                        {debugError.detail && (
+                          <div>
+                            <span className="text-red-400/60 uppercase tracking-widest text-[10px]">Groq Raw Response</span>
+                            <pre className="text-red-200/80 mt-0.5 whitespace-pre-wrap break-all leading-relaxed max-h-48 overflow-y-auto">{debugError.detail}</pre>
+                          </div>
+                        )}
+                        <div className="flex gap-2 pt-1">
+                          <button
+                            onClick={() => navigator.clipboard?.writeText(JSON.stringify(debugError, null, 2))}
+                            className="px-2.5 py-1 rounded bg-red-800/50 text-red-300 hover:bg-red-800 text-[11px]"
+                          >
+                            Copy
+                          </button>
+                          <button
+                            onClick={() => { setDebugError(null); setDebugOpen(false); }}
+                            className="px-2.5 py-1 rounded bg-red-800/50 text-red-300 hover:bg-red-800 text-[11px]"
+                          >
+                            Dismiss
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div className="mt-6 grid lg:grid-cols-2 gap-4">
                   <PdfPreview file={currentFile} />
