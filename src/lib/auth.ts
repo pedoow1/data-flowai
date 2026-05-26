@@ -71,17 +71,30 @@ export function useAuth() {
     const normalized = e.trim().toLowerCase();
     if (!/^\S+@\S+\.\S+$/.test(normalized)) return { ok: false, error: "Enter a valid email address." };
     if (password.length < 6) return { ok: false, error: "Password must be at least 6 characters." };
-    const { error } = await supabase.auth.signUp({
+    
+    const { data, error } = await supabase.auth.signUp({
       email: normalized,
       password,
-      options: { emailRedirectTo: typeof window !== "undefined" ? window.location.origin : undefined },
     });
+    
     if (error) {
       if (/registered|already/i.test(error.message)) {
         return { ok: false, error: "An account with this email already exists. Try signing in." };
       }
       return { ok: false, error: error.message };
     }
+    
+    // Auto-login after successful signup if session wasn't created
+    if (data?.user && !data.session) {
+      const { error: loginError } = await supabase.auth.signInWithPassword({
+        email: normalized,
+        password,
+      });
+      if (loginError) {
+        return { ok: false, error: "Account created but login failed. Please try signing in." };
+      }
+    }
+    
     return { ok: true };
   }, []);
 
