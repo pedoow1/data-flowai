@@ -27,22 +27,41 @@ export function useAuth() {
   }, []);
 
   const refreshRole = useCallback(async (uid: string | null, mail: string | null) => {
-    if (!uid) { _cachedIsAdmin = false; setIsAdmin(false); return; }
-    if (mail && mail.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
-      _cachedIsAdmin = true; setIsAdmin(true);
+    if (!uid) {
+      _cachedIsAdmin = false;
+      setIsAdmin(false);
       return;
     }
+
+    // First check: admin email hardcoded check
+    if (mail && mail.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+      _cachedIsAdmin = true;
+      setIsAdmin(true);
+      return;
+    }
+
+    // Second check: query database for admin role
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("user_roles")
         .select("role")
         .eq("user_id", uid)
         .eq("role", "admin")
         .maybeSingle();
-      _cachedIsAdmin = !!data;
-      setIsAdmin(!!data);
-    } catch {
+
+      if (error) {
+        console.warn("[auth] Error checking admin role:", error);
+        _cachedIsAdmin = false;
+        setIsAdmin(false);
+        return;
+      }
+
+      const isUserAdmin = !!data;
+      _cachedIsAdmin = isUserAdmin;
+      setIsAdmin(isUserAdmin);
+    } catch (err) {
       // network failure — keep existing admin state, don't block the UI
+      console.warn("[auth] Exception checking admin role:", err);
     }
   }, []);
 
@@ -58,9 +77,10 @@ export function useAuth() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       const u = session?.user ?? null;
       applyUser(u);
-      setReady(true);
       void refreshRole(u?.id ?? null, u?.email ?? null);
-    }).catch(() => {
+      setReady(true);
+    }).catch((err) => {
+      console.warn("[auth] Error getting session:", err);
       setReady(true);
     });
 
@@ -72,9 +92,7 @@ export function useAuth() {
     if (!/^\S+@\S+\.\S+$/.test(normalized)) return { ok: false, error: "Enter a valid email address." };
     if (password.length < 6) return { ok: false, error: "Password must be at least 6 characters." };
     
-    // Create user in Supabase without emailRedirectTo
-    // Email verification is handled via Resend OTP in the signup flow
-    // Since Supabase confirm_email is disabled, users are auto-confirmed
+    // Create user in Supabase
     const { data, error } = await supabase.auth.signUp({
       email: normalized,
       password,
