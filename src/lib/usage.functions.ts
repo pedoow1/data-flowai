@@ -26,25 +26,64 @@ type UsageSummary = {
   periodEnd: string | null;
 };
 
+function isSchemaCacheError(error: { message?: string } | null | undefined) {
+  const message = error?.message?.toLowerCase() ?? "";
+  return message.includes("schema cache") && message.includes("current_period_");
+}
+
+async function loadSubscriptionState(supabase: any, userId: string) {
+  const fullRes = await supabase
+    .from("subscriptions")
+    .select("plan, status, current_period_start, current_period_end")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (!fullRes.error) {
+    return {
+      plan: fullRes.data?.plan as Plan | undefined,
+      status: fullRes.data?.status as string | undefined,
+      currentPeriodStart: fullRes.data?.current_period_start ?? null,
+      currentPeriodEnd: fullRes.data?.current_period_end ?? null,
+    };
+  }
+
+  if (!isSchemaCacheError(fullRes.error)) {
+    throw new Error(fullRes.error.message);
+  }
+
+  const fallbackRes = await supabase
+    .from("subscriptions")
+    .select("plan, status")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (fallbackRes.error) {
+    throw new Error(fallbackRes.error.message);
+  }
+
+  return {
+    plan: fallbackRes.data?.plan as Plan | undefined,
+    status: fallbackRes.data?.status as string | undefined,
+    currentPeriodStart: null,
+    currentPeriodEnd: null,
+  };
+}
+
 function isValidActivePeriod(periodEnd: string | null | undefined) {
   return !!periodEnd && new Date(periodEnd).getTime() > Date.now();
 }
 
 async function resolveEffectivePlan(supabase: any, userId: string, isAdminOverride = false) {
-  const [subRes, adminRes] = await Promise.all([
-    supabase
-      .from("subscriptions")
-      .select("plan, status, current_period_start, current_period_end")
-      .eq("user_id", userId)
-      .maybeSingle(),
+  const [subscriptionState, adminRes] = await Promise.all([
+    loadSubscriptionState(supabase, userId),
     supabase.from("user_roles").select("role").eq("user_id", userId).eq("role", "admin").maybeSingle(),
   ]);
 
   const isAdmin = isAdminOverride || !!adminRes.data;
-  const rawPlan = (subRes.data?.plan as Plan | undefined) ?? "free";
-  const status = subRes.data?.status ?? "active";
-  const currentPeriodStart = subRes.data?.current_period_start ?? null;
-  const currentPeriodEnd = subRes.data?.current_period_end ?? null;
+  const rawPlan = subscriptionState.plan ?? "free";
+  const status = subscriptionState.status ?? "active";
+  const currentPeriodStart = subscriptionState.currentPeriodStart;
+  const currentPeriodEnd = subscriptionState.currentPeriodEnd;
 
   const isPaidPlan = rawPlan === "pro" || rawPlan === "team";
   const isSubscriptionActive = status === "active" && isValidActivePeriod(currentPeriodEnd);
@@ -148,7 +187,12 @@ export const recordUpload = createServerFn({ method: "POST" })
       claims.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
     const usage = await getPlanAndUsage(supabase, userId, isAdminEmail);
     if (!usage.unlimited && usage.remaining <= 0) {
-      return { ok: false as const, error: "Daily limit reached for your plan.", usage };
+      const cycleLabel = usage.cycle === "monthly"
+        ? "monthly"
+        : usage.cycle === "daily"
+          ? "daily"
+          : "free-plan";
+      return { ok: false as const, error: `Your ${cycleLabel} limit has been reached.`, usage };
     }
     const { error } = await supabase.from("uploads").insert({ user_id: userId, file_name: data.fileName });
     if (error) return { ok: false as const, error: error.message, usage };
@@ -190,6 +234,11 @@ export const setAdminPlan = createServerFn({ method: "POST" })
         },
         { onConflict: "user_id" }
       );
-    if (error) return { ok: false as const, error: error.message };
+    if (error) {
+      const friendly = isSchemaCacheError(error)
+        ? "The backend is still refreshing its subscription schema. Please try again now."
+        : error.message;
+      return { ok: false as const, error: friendly };
+    }
     return { ok: true as const, plan: data.plan };
   });
