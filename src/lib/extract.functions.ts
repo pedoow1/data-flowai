@@ -1,11 +1,25 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { getPlanAndUsage } from "./usage.functions";
+import { ADMIN_EMAIL } from "./config";
 
 // ── Groq configuration ──────────────────────────────────────────────────────
 const TEXT_MODEL   = "llama-3.3-70b-versatile";
-const VISION_MODEL = "llama-4-scout-17b-16e-instruct";
+const VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
 const GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions";
 const TIMEOUT_MS   = 120_000;
+
+async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
+  const isAdminEmail =
+    typeof context.claims?.email === "string" &&
+    context.claims.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+  const usage = await getPlanAndUsage(context.supabase, context.userId, isAdminEmail);
+  if (!usage.unlimited && usage.remaining <= 0) {
+    return "Daily limit reached for your plan. Upgrade to extract more documents.";
+  }
+  return null;
+}
 
 // ── Shared schemas ───────────────────────────────────────────────────────────
 const CellSchema = z.object({ v: z.string(), c: z.number().min(0).max(100) });
@@ -164,8 +178,12 @@ async function runWithRetry(
 
 // ── Server function: text extraction (llama-3.3-70b) ─────────────────────────
 export const extractFromText = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => TextInputSchema.parse(d))
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
+    const quotaError = await assertWithinQuota(context);
+    if (quotaError) return { ok: false as const, error: quotaError };
+
     const apiKey = (process.env.GROQ_API_KEY || "").trim();
     if (!apiKey) return { ok: false as const, error: "Server misconfigured (missing GROQ_API_KEY)." };
     if (!apiKey.startsWith("gsk_")) return { ok: false as const, error: "Invalid GROQ_API_KEY format — must start with gsk_. Check Vercel environment variables." };
@@ -193,8 +211,12 @@ export const extractFromText = createServerFn({ method: "POST" })
 
 // ── Server function: vision extraction (llama-4-scout) ───────────────────────
 export const extractFromImage = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => ImageInputSchema.parse(d))
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
+    const quotaError = await assertWithinQuota(context);
+    if (quotaError) return { ok: false as const, error: quotaError };
+
     const apiKey = (process.env.GROQ_API_KEY || "").trim();
     if (!apiKey) return { ok: false as const, error: "Server misconfigured (missing GROQ_API_KEY)." };
     if (!apiKey.startsWith("gsk_")) return { ok: false as const, error: "Invalid GROQ_API_KEY format — must start with gsk_. Check Vercel environment variables." };

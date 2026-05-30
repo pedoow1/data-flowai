@@ -3,22 +3,6 @@ import { getRequest } from '@tanstack/react-start/server'
 import { createClient } from '@supabase/supabase-js'
 import type { Database } from './types'
 
-function decodeJWT(token: string): Record<string, unknown> | null {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const decoded = JSON.parse(
-      typeof atob !== 'undefined'
-        ? atob(payload)
-        : Buffer.from(payload, 'base64').toString('utf-8')
-    );
-    return decoded;
-  } catch {
-    return null;
-  }
-}
-
 export const requireSupabaseAuth = createMiddleware({ type: 'function' })
   .client(async ({ next }) => {
     const { supabase } = await import('./client');
@@ -48,22 +32,25 @@ export const requireSupabaseAuth = createMiddleware({ type: 'function' })
     }
 
     const token = authHeader.replace('Bearer ', '').trim();
-    const payload = decodeJWT(token);
-    if (!payload) throw new Error('Unauthorized: Invalid session token.');
 
-    const nowSec = Math.floor(Date.now() / 1000);
-    if (typeof payload.exp === 'number' && payload.exp < nowSec) {
-      throw new Error('Unauthorized: Session expired. Please sign in again.');
-    }
-
-    const userId = (payload.sub as string) || null;
-    const email  = (payload.email as string) || null;
-    if (!userId) throw new Error('Unauthorized: No user identity in token.');
-
+    // Create a token-scoped client (RLS applies as this user).
     const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: `Bearer ${token}` } },
       auth:   { storage: undefined, persistSession: false, autoRefreshToken: false },
     });
 
-    return next({ context: { supabase, userId, claims: { sub: userId, email } } });
+    // CRITICAL: verify the JWT signature with Supabase's Auth server.
+    // Never trust the decoded payload directly — that allows forged tokens.
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (error || !user) {
+      throw new Error('Unauthorized: Invalid or expired session. Please sign in again.');
+    }
+
+    return next({
+      context: {
+        supabase,
+        userId: user.id,
+        claims: { sub: user.id, email: user.email ?? null },
+      },
+    });
   });

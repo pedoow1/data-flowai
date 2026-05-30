@@ -15,7 +15,7 @@ function getServiceClient() {
   });
 }
 
-async function getPlanAndUsage(supabase: any, userId: string, isAdminOverride = false) {
+export async function getPlanAndUsage(supabase: any, userId: string, isAdminOverride = false) {
   const since = new Date(Date.now() - DAY_MS).toISOString();
   const [subRes, countRes, adminRes] = await Promise.all([
     supabase.from("subscriptions").select("plan").eq("user_id", userId).maybeSingle(),
@@ -81,7 +81,10 @@ export const setAdminPlan = createServerFn({ method: "POST" })
       if (!roleData) throw new Error("Forbidden");
     }
 
-    const { error } = await supabase
+    // Use the service-role client: the subscriptions table has no user-level
+    // INSERT/UPDATE RLS policy, so a token-scoped client cannot upsert.
+    const admin = getServiceClient();
+    const { error } = await admin
       .from("subscriptions")
       .upsert(
         { user_id: userId, plan: data.plan, status: "active", updated_at: new Date().toISOString() },
