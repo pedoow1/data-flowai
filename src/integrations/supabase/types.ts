@@ -17,6 +17,8 @@ export type Database = {
       pending_subscriptions: {
         Row: {
           created_at: string
+          current_period_end: string | null
+          current_period_start: string | null
           email: string
           gumroad_sale_id: string | null
           gumroad_subscription_id: string | null
@@ -24,6 +26,8 @@ export type Database = {
         }
         Insert: {
           created_at?: string
+          current_period_end?: string | null
+          current_period_start?: string | null
           email: string
           gumroad_sale_id?: string | null
           gumroad_subscription_id?: string | null
@@ -31,6 +35,8 @@ export type Database = {
         }
         Update: {
           created_at?: string
+          current_period_end?: string | null
+          current_period_start?: string | null
           email?: string
           gumroad_sale_id?: string | null
           gumroad_subscription_id?: string | null
@@ -58,6 +64,8 @@ export type Database = {
       }
       subscriptions: {
         Row: {
+          current_period_end: string | null
+          current_period_start: string | null
           gumroad_sale_id: string | null
           gumroad_subscription_id: string | null
           plan: Database["public"]["Enums"]["plan_tier"]
@@ -66,6 +74,8 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          current_period_end?: string | null
+          current_period_start?: string | null
           gumroad_sale_id?: string | null
           gumroad_subscription_id?: string | null
           plan?: Database["public"]["Enums"]["plan_tier"]
@@ -74,6 +84,8 @@ export type Database = {
           user_id: string
         }
         Update: {
+          current_period_end?: string | null
+          current_period_start?: string | null
           gumroad_sale_id?: string | null
           gumroad_subscription_id?: string | null
           plan?: Database["public"]["Enums"]["plan_tier"]
