@@ -2,6 +2,67 @@ import { createFileRoute } from "@tanstack/react-router";
 import { supabaseAdmin, hasAdminClient } from "@/integrations/supabase/client.server";
 import { GUMROAD_PRODUCT_TO_PLAN, getNextPeriodDates, type Plan } from "@/lib/config";
 
+function isPeriodColumnError(error: { message?: string } | null | undefined) {
+  const message = error?.message?.toLowerCase() ?? "";
+  return message.includes("current_period_") && (
+    message.includes("schema cache") ||
+    message.includes("does not exist") ||
+    message.includes("could not find the")
+  );
+}
+
+async function upsertSubscriptionWithFallback(payload: {
+  user_id: string;
+  plan: Plan;
+  status: string;
+  gumroad_sale_id: string | null;
+  gumroad_subscription_id: string | null;
+  current_period_start: string | null;
+  current_period_end: string | null;
+  updated_at: string;
+}) {
+  const fullRes = await supabaseAdmin.from("subscriptions").upsert(payload, { onConflict: "user_id" });
+  if (!fullRes.error || !isPeriodColumnError(fullRes.error)) {
+    return fullRes;
+  }
+
+  return supabaseAdmin.from("subscriptions").upsert(
+    {
+      user_id: payload.user_id,
+      plan: payload.plan,
+      status: payload.status,
+      gumroad_sale_id: payload.gumroad_sale_id,
+      gumroad_subscription_id: payload.gumroad_subscription_id,
+      updated_at: payload.updated_at,
+    },
+    { onConflict: "user_id" },
+  );
+}
+
+async function upsertPendingSubscriptionWithFallback(payload: {
+  email: string;
+  plan: Plan;
+  gumroad_sale_id: string | null;
+  gumroad_subscription_id: string | null;
+  current_period_start: string | null;
+  current_period_end: string | null;
+}) {
+  const fullRes = await supabaseAdmin.from("pending_subscriptions").upsert(payload, { onConflict: "email" });
+  if (!fullRes.error || !isPeriodColumnError(fullRes.error)) {
+    return fullRes;
+  }
+
+  return supabaseAdmin.from("pending_subscriptions").upsert(
+    {
+      email: payload.email,
+      plan: payload.plan,
+      gumroad_sale_id: payload.gumroad_sale_id,
+      gumroad_subscription_id: payload.gumroad_subscription_id,
+    },
+    { onConflict: "email" },
+  );
+}
+
 export const Route = createFileRoute("/api/public/gumroad-webhook")({
   server: {
     handlers: {
@@ -61,32 +122,26 @@ export const Route = createFileRoute("/api/public/gumroad-webhook")({
           if (profileErr) throw profileErr;
 
           if (profile?.id) {
-            const { error } = await supabaseAdmin.from("subscriptions").upsert(
-              {
-                user_id: profile.id,
-                plan: newPlan,
-                status,
-                gumroad_sale_id: saleId,
-                gumroad_subscription_id: subId,
-                current_period_start: isCancel || newPlan === "free" ? null : start,
-                current_period_end: isCancel || newPlan === "free" ? null : end,
-                updated_at: new Date().toISOString(),
-              },
-              { onConflict: "user_id" },
-            );
+            const { error } = await upsertSubscriptionWithFallback({
+              user_id: profile.id,
+              plan: newPlan,
+              status,
+              gumroad_sale_id: saleId,
+              gumroad_subscription_id: subId,
+              current_period_start: isCancel || newPlan === "free" ? null : start,
+              current_period_end: isCancel || newPlan === "free" ? null : end,
+              updated_at: new Date().toISOString(),
+            });
             if (error) throw error;
           } else if (newPlan !== "free") {
-            const { error } = await supabaseAdmin.from("pending_subscriptions").upsert(
-              {
-                email,
-                plan: newPlan,
-                gumroad_sale_id: saleId,
-                gumroad_subscription_id: subId,
-                current_period_start: start,
-                current_period_end: end,
-              },
-              { onConflict: "email" },
-            );
+            const { error } = await upsertPendingSubscriptionWithFallback({
+              email,
+              plan: newPlan,
+              gumroad_sale_id: saleId,
+              gumroad_subscription_id: subId,
+              current_period_start: start,
+              current_period_end: end,
+            });
             if (error) throw error;
             console.log(`[gumroad] Stored pending subscription for ${email} (plan: ${newPlan})`);
           }
