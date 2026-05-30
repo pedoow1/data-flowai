@@ -30,6 +30,15 @@ export default defineConfig({
       process.env.SUPABASE_PUBLISHABLE_KEY ||
       ""
     ),
+    "import.meta.env.VITE_SUPABASE_PROJECT_ID": JSON.stringify(
+      process.env.VITE_SUPABASE_PROJECT_ID || ""
+    ),
+    "import.meta.env.VITE_POSTHOG_KEY": JSON.stringify(
+      process.env.VITE_POSTHOG_KEY || ""
+    ),
+    "import.meta.env.VITE_POSTHOG_HOST": JSON.stringify(
+      process.env.VITE_POSTHOG_HOST || "https://us.i.posthog.com"
+    ),
   },
   server: {
     host: "0.0.0.0",
