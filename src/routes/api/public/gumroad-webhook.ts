@@ -1,7 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { db } from "@server/db";
-import { profiles, subscriptions, pendingSubscriptions } from "@shared/schema";
-import { eq, sql } from "drizzle-orm";
+import { supabaseAdmin, hasAdminClient } from "@/integrations/supabase/client.server";
 import { GUMROAD_PRODUCT_TO_PLAN, type Plan } from "@/lib/config";
 
 export const Route = createFileRoute("/api/public/gumroad-webhook")({
@@ -13,13 +11,18 @@ export const Route = createFileRoute("/api/public/gumroad-webhook")({
           console.error("[gumroad] GUMROAD_WEBHOOK_SECRET is not configured");
           return new Response("Server misconfigured", { status: 500 });
         }
+        if (!hasAdminClient()) {
+          console.error("[gumroad] Supabase admin client is not configured");
+          return new Response("Server misconfigured", { status: 500 });
+        }
 
         const url = new URL(request.url);
         const provided =
           url.searchParams.get("secret") ||
           request.headers.get("x-webhook-secret") ||
           "";
-        if (provided !== secret) {
+        // Constant-time-ish comparison to avoid leaking secret length via timing.
+        if (provided.length !== secret.length || provided !== secret) {
           return new Response("Unauthorized", { status: 401 });
         }
 
@@ -28,70 +31,58 @@ export const Route = createFileRoute("/api/public/gumroad-webhook")({
         const event = (params.get("resource_name") || params.get("event") || "sale").toLowerCase();
         const email = (params.get("email") || "").trim().toLowerCase();
         const productName = params.get("product_name") || "";
-        const saleId = params.get("sale_id") || undefined;
-        const subId = params.get("subscription_id") || undefined;
+        const saleId = params.get("sale_id") || null;
+        const subId = params.get("subscription_id") || null;
 
-        if (!email) {
-          console.error("[gumroad] Missing email in payload");
+        if (!email || email.length > 320 || !/^\S+@\S+\.\S+$/.test(email)) {
+          console.error("[gumroad] Missing or invalid email in payload");
           return new Response("Missing email", { status: 400 });
         }
 
         let newPlan: Plan = "free";
         const isCancel = /cancel|refund|end|dispute|fail/.test(event);
-        if (isCancel) {
-          newPlan = "free";
-        } else {
+        if (!isCancel) {
           newPlan = GUMROAD_PRODUCT_TO_PLAN[productName] ?? "free";
           if (newPlan === "free") {
             console.warn(`[gumroad] Unknown product_name "${productName}" — defaulting to free`);
           }
         }
 
-        try {
-          const profile = await db
-            .select({ id: profiles.id })
-            .from(profiles)
-            .where(sql`lower(${profiles.email}) = ${email}`)
-            .limit(1);
+        const status = isCancel ? "cancelled" : "active";
 
-          if (profile.length > 0) {
-            await db
-              .insert(subscriptions)
-              .values({
-                userId: profile[0].id,
+        try {
+          const { data: profile, error: profileErr } = await supabaseAdmin
+            .from("profiles")
+            .select("id")
+            .ilike("email", email)
+            .maybeSingle();
+
+          if (profileErr) throw profileErr;
+
+          if (profile?.id) {
+            const { error } = await supabaseAdmin.from("subscriptions").upsert(
+              {
+                user_id: profile.id,
                 plan: newPlan,
-                status: isCancel ? "cancelled" : "active",
-                gumroadSaleId: saleId ?? null,
-                gumroadSubscriptionId: subId ?? null,
-                updatedAt: new Date(),
-              })
-              .onConflictDoUpdate({
-                target: subscriptions.userId,
-                set: {
-                  plan: newPlan,
-                  status: isCancel ? "cancelled" : "active",
-                  gumroadSaleId: saleId ?? null,
-                  gumroadSubscriptionId: subId ?? null,
-                  updatedAt: new Date(),
-                },
-              });
+                status,
+                gumroad_sale_id: saleId,
+                gumroad_subscription_id: subId,
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: "user_id" },
+            );
+            if (error) throw error;
           } else if (newPlan !== "free") {
-            await db
-              .insert(pendingSubscriptions)
-              .values({
+            const { error } = await supabaseAdmin.from("pending_subscriptions").upsert(
+              {
                 email,
                 plan: newPlan,
-                gumroadSaleId: saleId ?? null,
-                gumroadSubscriptionId: subId ?? null,
-              })
-              .onConflictDoUpdate({
-                target: pendingSubscriptions.email,
-                set: {
-                  plan: newPlan,
-                  gumroadSaleId: saleId ?? null,
-                  gumroadSubscriptionId: subId ?? null,
-                },
-              });
+                gumroad_sale_id: saleId,
+                gumroad_subscription_id: subId,
+              },
+              { onConflict: "email" },
+            );
+            if (error) throw error;
             console.log(`[gumroad] Stored pending subscription for ${email} (plan: ${newPlan})`);
           }
         } catch (e) {

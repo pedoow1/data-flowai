@@ -17,7 +17,6 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as ApiMeRouteImport } from './routes/api/me'
 import { Route as ApiPublicGumroadWebhookRouteImport } from './routes/api/public/gumroad-webhook'
 
 const TermsRoute = TermsRouteImport.update({
@@ -60,11 +59,6 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiMeRoute = ApiMeRouteImport.update({
-  id: '/api/me',
-  path: '/api/me',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ApiPublicGumroadWebhookRoute = ApiPublicGumroadWebhookRouteImport.update({
   id: '/api/public/gumroad-webhook',
   path: '/api/public/gumroad-webhook',
@@ -80,7 +74,6 @@ export interface FileRoutesByFullPath {
   '/privacy': typeof PrivacyRoute
   '/signup': typeof SignupRoute
   '/terms': typeof TermsRoute
-  '/api/me': typeof ApiMeRoute
   '/api/public/gumroad-webhook': typeof ApiPublicGumroadWebhookRoute
 }
 export interface FileRoutesByTo {
@@ -92,7 +85,6 @@ export interface FileRoutesByTo {
   '/privacy': typeof PrivacyRoute
   '/signup': typeof SignupRoute
   '/terms': typeof TermsRoute
-  '/api/me': typeof ApiMeRoute
   '/api/public/gumroad-webhook': typeof ApiPublicGumroadWebhookRoute
 }
 export interface FileRoutesById {
@@ -105,7 +97,6 @@ export interface FileRoutesById {
   '/privacy': typeof PrivacyRoute
   '/signup': typeof SignupRoute
   '/terms': typeof TermsRoute
-  '/api/me': typeof ApiMeRoute
   '/api/public/gumroad-webhook': typeof ApiPublicGumroadWebhookRoute
 }
 export interface FileRouteTypes {
@@ -119,7 +110,6 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/signup'
     | '/terms'
-    | '/api/me'
     | '/api/public/gumroad-webhook'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -131,7 +121,6 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/signup'
     | '/terms'
-    | '/api/me'
     | '/api/public/gumroad-webhook'
   id:
     | '__root__'
@@ -143,7 +132,6 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/signup'
     | '/terms'
-    | '/api/me'
     | '/api/public/gumroad-webhook'
   fileRoutesById: FileRoutesById
 }
@@ -156,7 +144,6 @@ export interface RootRouteChildren {
   PrivacyRoute: typeof PrivacyRoute
   SignupRoute: typeof SignupRoute
   TermsRoute: typeof TermsRoute
-  ApiMeRoute: typeof ApiMeRoute
   ApiPublicGumroadWebhookRoute: typeof ApiPublicGumroadWebhookRoute
 }
 
@@ -218,13 +205,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/me': {
-      id: '/api/me'
-      path: '/api/me'
-      fullPath: '/api/me'
-      preLoaderRoute: typeof ApiMeRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/api/public/gumroad-webhook': {
       id: '/api/public/gumroad-webhook'
       path: '/api/public/gumroad-webhook'
@@ -244,7 +224,6 @@ const rootRouteChildren: RootRouteChildren = {
   PrivacyRoute: PrivacyRoute,
   SignupRoute: SignupRoute,
   TermsRoute: TermsRoute,
-  ApiMeRoute: ApiMeRoute,
   ApiPublicGumroadWebhookRoute: ApiPublicGumroadWebhookRoute,
 }
 export const routeTree = rootRouteImport
