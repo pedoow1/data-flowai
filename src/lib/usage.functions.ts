@@ -1,10 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { PLAN_LIMITS, ADMIN_EMAIL, type Plan } from "./config";
+import { ADMIN_EMAIL, FREE_LIFETIME_LIMIT, PRO_MONTHLY_LIMIT, TEAM_DAILY_LIMIT, getNextPeriodDates, type Plan } from "./config";
 import { createClient } from "@supabase/supabase-js";
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 function getServiceClient() {
   const url = process.env.SUPABASE_URL!;
@@ -15,25 +13,138 @@ function getServiceClient() {
   });
 }
 
-export async function getPlanAndUsage(supabase: any, userId: string, isAdminOverride = false) {
-  const since = new Date(Date.now() - DAY_MS).toISOString();
-  const [subRes, countRes, adminRes] = await Promise.all([
-    supabase.from("subscriptions").select("plan").eq("user_id", userId).maybeSingle(),
+type UsageSummary = {
+  plan: Plan;
+  used: number;
+  limit: number;
+  remaining: number;
+  unlimited: boolean;
+  isAdmin: boolean;
+  cycle: "lifetime" | "monthly" | "daily";
+  label: string;
+  periodStart: string | null;
+  periodEnd: string | null;
+};
+
+function isValidActivePeriod(periodEnd: string | null | undefined) {
+  return !!periodEnd && new Date(periodEnd).getTime() > Date.now();
+}
+
+async function resolveEffectivePlan(
+  supabase: any,
+  userId: string,
+  isAdminOverride = false,
+) {
+  const [subRes, adminRes] = await Promise.all([
     supabase
+      .from("subscriptions")
+      .select("plan, status, current_period_start, current_period_end")
+      .eq("user_id", userId)
+      .maybeSingle(),
+    supabase.from("user_roles").select("role").eq("user_id", userId).eq("role", "admin").maybeSingle(),
+  ]);
+
+  const isAdmin = isAdminOverride || !!adminRes.data;
+  const rawPlan = (subRes.data?.plan as Plan | undefined) ?? "free";
+  const status = subRes.data?.status ?? "active";
+  const currentPeriodStart = subRes.data?.current_period_start ?? null;
+  const currentPeriodEnd = subRes.data?.current_period_end ?? null;
+
+  const isPaidPlan = rawPlan === "pro" || rawPlan === "team";
+  const isSubscriptionActive = status === "active" && isValidActivePeriod(currentPeriodEnd);
+  const effectivePlan: Plan = isPaidPlan && !isSubscriptionActive ? "free" : rawPlan;
+
+  return {
+    isAdmin,
+    plan: effectivePlan,
+    storedPlan: rawPlan,
+    status,
+    currentPeriodStart,
+    currentPeriodEnd,
+  };
+}
+
+export async function getPlanAndUsage(supabase: any, userId: string, isAdminOverride = false) {
+  const effective = await resolveEffectivePlan(supabase, userId, isAdminOverride);
+
+  if (effective.isAdmin) {
+    return {
+      plan: effective.plan,
+      used: 0,
+      limit: Number.MAX_SAFE_INTEGER,
+      remaining: Number.MAX_SAFE_INTEGER,
+      unlimited: true,
+      isAdmin: true,
+      cycle: effective.plan === "free" ? "lifetime" : effective.plan === "pro" ? "monthly" : "daily",
+      label: effective.plan === "free" ? "Free admin access" : `${effective.plan.toUpperCase()} admin access`,
+      periodStart: effective.currentPeriodStart,
+      periodEnd: effective.currentPeriodEnd,
+    } satisfies UsageSummary;
+  }
+
+  if (effective.plan === "free") {
+    const countRes = await supabase
+      .from("uploads")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId);
+    const used = countRes.count ?? 0;
+    return {
+      plan: "free",
+      used,
+      limit: FREE_LIFETIME_LIMIT,
+      remaining: Math.max(0, FREE_LIFETIME_LIMIT - used),
+      unlimited: false,
+      isAdmin: false,
+      cycle: "lifetime",
+      label: "Free trial extractions",
+      periodStart: null,
+      periodEnd: null,
+    } satisfies UsageSummary;
+  }
+
+  if (effective.plan === "pro") {
+    const periodStart = effective.currentPeriodStart ?? new Date(0).toISOString();
+    const periodEnd = effective.currentPeriodEnd;
+    const countRes = await supabase
       .from("uploads")
       .select("id", { count: "exact", head: true })
       .eq("user_id", userId)
-      .gte("created_at", since),
-    supabase.from("user_roles").select("role").eq("user_id", userId).eq("role", "admin").maybeSingle(),
-  ]);
-  const isAdmin = isAdminOverride || !!adminRes.data;
-  const plan: Plan = (subRes.data?.plan as Plan) ?? "free";
+      .gte("created_at", periodStart)
+      .lt("created_at", periodEnd ?? "9999-12-31T23:59:59.999Z");
+    const used = countRes.count ?? 0;
+    return {
+      plan: "pro",
+      used,
+      limit: PRO_MONTHLY_LIMIT,
+      remaining: Math.max(0, PRO_MONTHLY_LIMIT - used),
+      unlimited: false,
+      isAdmin: false,
+      cycle: "monthly",
+      label: "Monthly Pro extractions",
+      periodStart,
+      periodEnd,
+    } satisfies UsageSummary;
+  }
+
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const countRes = await supabase
+    .from("uploads")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .gte("created_at", since);
   const used = countRes.count ?? 0;
-  const limitNum = PLAN_LIMITS[plan];
-  const isUnlimited = isAdmin || !Number.isFinite(limitNum);
-  const limit = isUnlimited ? Number.MAX_SAFE_INTEGER : (limitNum as number);
-  const remaining = isUnlimited ? Number.MAX_SAFE_INTEGER : Math.max(0, limit - used);
-  return { plan, used, limit, remaining, unlimited: isUnlimited, isAdmin };
+  return {
+    plan: "team",
+    used,
+    limit: TEAM_DAILY_LIMIT,
+    remaining: Math.max(0, TEAM_DAILY_LIMIT - used),
+    unlimited: false,
+    isAdmin: false,
+    cycle: "daily",
+    label: "Daily Team extractions",
+    periodStart: effective.currentPeriodStart,
+    periodEnd: effective.currentPeriodEnd,
+  } satisfies UsageSummary;
 }
 
 export const getMyUsage = createServerFn({ method: "GET" })
@@ -84,12 +195,20 @@ export const setAdminPlan = createServerFn({ method: "POST" })
     // Use the service-role client: the subscriptions table has no user-level
     // INSERT/UPDATE RLS policy, so a token-scoped client cannot upsert.
     const admin = getServiceClient();
+    const { start, end } = getNextPeriodDates();
     const { error } = await admin
       .from("subscriptions")
       .upsert(
-        { user_id: userId, plan: data.plan, status: "active", updated_at: new Date().toISOString() },
+        {
+          user_id: userId,
+          plan: data.plan,
+          status: "active",
+          current_period_start: data.plan === "free" ? null : start,
+          current_period_end: data.plan === "free" ? null : end,
+          updated_at: new Date().toISOString(),
+        },
         { onConflict: "user_id" }
       );
     if (error) return { ok: false as const, error: error.message };
-    return { ok: true as const };
+    return { ok: true as const, plan: data.plan };
   });
