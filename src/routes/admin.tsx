@@ -190,7 +190,45 @@ function AdminPage() {
           )}
 
           {!usersLoading && filtered.length > 0 && (
-            <div className="overflow-x-auto">
+            <>
+            <div className="grid gap-3 p-4 sm:hidden">
+              {filtered.map((u, i) => (
+                <div key={u.id} className="rounded-xl border border-border/60 bg-white/[0.02] p-3 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-[11px] text-muted-foreground">#{i + 1}</div>
+                      <div className="font-mono text-xs break-all">{u.email}</div>
+                    </div>
+                    <span className={`text-[10px] font-semibold border rounded px-1.5 py-0.5 ${PLAN_COLOR[user.plan] ?? PLAN_COLOR.free}`.replace("user.plan", "")}></span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div><span className="text-muted-foreground block">Uploads 24h</span><span className="font-mono">{u.uploads24h}</span></div>
+                    <div><span className="text-muted-foreground block">Joined</span><span>{new Date(u.joinedAt).toLocaleDateString()}</span></div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(["free", "pro", "team"] as const).map((p) => (
+                      <button
+                        key={p}
+                        disabled={changingId === u.id || p === u.plan}
+                        onClick={() => handlePlanChange(u.id, p)}
+                        className={`px-2 py-2 rounded text-[11px] font-semibold border transition disabled:opacity-40 ${
+                          p === u.plan
+                            ? p === "team"
+                              ? "bg-yellow-400/20 text-yellow-400 border-yellow-400/50"
+                              : p === "pro"
+                                ? "bg-lime/20 text-lime border-lime/50"
+                                : "bg-white/10 text-foreground border-border"
+                            : "bg-transparent text-muted-foreground border-border/50"
+                        }`}
+                      >
+                        {p.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="hidden overflow-x-auto sm:block">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border text-xs text-muted-foreground uppercase tracking-wider">
@@ -215,6 +253,7 @@ function AdminPage() {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </div>
       </main>
