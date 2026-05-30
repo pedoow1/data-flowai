@@ -54,7 +54,7 @@ export const Route = createFileRoute("/api/public/gumroad-webhook")({
           const { data: profile, error: profileErr } = await supabaseAdmin
             .from("profiles")
             .select("id")
-            .ilike("email", email)
+            .eq("email", email)
             .maybeSingle();
 
           if (profileErr) throw profileErr;
