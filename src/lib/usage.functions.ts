@@ -30,11 +30,7 @@ function isValidActivePeriod(periodEnd: string | null | undefined) {
   return !!periodEnd && new Date(periodEnd).getTime() > Date.now();
 }
 
-async function resolveEffectivePlan(
-  supabase: any,
-  userId: string,
-  isAdminOverride = false,
-) {
+async function resolveEffectivePlan(supabase: any, userId: string, isAdminOverride = false) {
   const [subRes, adminRes] = await Promise.all([
     supabase
       .from("subscriptions")
@@ -67,21 +63,6 @@ async function resolveEffectivePlan(
 export async function getPlanAndUsage(supabase: any, userId: string, isAdminOverride = false) {
   const effective = await resolveEffectivePlan(supabase, userId, isAdminOverride);
 
-  if (effective.isAdmin) {
-    return {
-      plan: effective.plan,
-      used: 0,
-      limit: Number.MAX_SAFE_INTEGER,
-      remaining: Number.MAX_SAFE_INTEGER,
-      unlimited: true,
-      isAdmin: true,
-      cycle: effective.plan === "free" ? "lifetime" : effective.plan === "pro" ? "monthly" : "daily",
-      label: effective.plan === "free" ? "Free admin access" : `${effective.plan.toUpperCase()} admin access`,
-      periodStart: effective.currentPeriodStart,
-      periodEnd: effective.currentPeriodEnd,
-    } satisfies UsageSummary;
-  }
-
   if (effective.plan === "free") {
     const countRes = await supabase
       .from("uploads")
@@ -94,7 +75,7 @@ export async function getPlanAndUsage(supabase: any, userId: string, isAdminOver
       limit: FREE_LIFETIME_LIMIT,
       remaining: Math.max(0, FREE_LIFETIME_LIMIT - used),
       unlimited: false,
-      isAdmin: false,
+      isAdmin: effective.isAdmin,
       cycle: "lifetime",
       label: "Free trial extractions",
       periodStart: null,
@@ -118,7 +99,7 @@ export async function getPlanAndUsage(supabase: any, userId: string, isAdminOver
       limit: PRO_MONTHLY_LIMIT,
       remaining: Math.max(0, PRO_MONTHLY_LIMIT - used),
       unlimited: false,
-      isAdmin: false,
+      isAdmin: effective.isAdmin,
       cycle: "monthly",
       label: "Monthly Pro extractions",
       periodStart,
@@ -139,7 +120,7 @@ export async function getPlanAndUsage(supabase: any, userId: string, isAdminOver
     limit: TEAM_DAILY_LIMIT,
     remaining: Math.max(0, TEAM_DAILY_LIMIT - used),
     unlimited: false,
-    isAdmin: false,
+    isAdmin: effective.isAdmin,
     cycle: "daily",
     label: "Daily Team extractions",
     periodStart: effective.currentPeriodStart,
