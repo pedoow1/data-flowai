@@ -1,7 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { db } from "@server/db";
-import { supportTickets } from "@shared/schema";
+import { supabaseAdmin, hasAdminClient } from "@/integrations/supabase/client.server";
 
 const Input = z.object({
   name: z.string().trim().min(1).max(120),
@@ -42,12 +41,15 @@ export const sendSupport = createServerFn({ method: "POST" })
     }
 
     try {
-      await db.insert(supportTickets).values({
-        name: data.name,
-        email: data.email || null,
-        message: data.message,
-        delivered,
-      });
+      if (hasAdminClient()) {
+        const { error } = await supabaseAdmin.from("support_tickets").insert({
+          name: data.name,
+          email: data.email || null,
+          message: data.message,
+          delivered,
+        });
+        if (error) throw error;
+      }
     } catch (e) {
       console.error("[support] insert failed", e);
     }
