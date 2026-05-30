@@ -178,8 +178,12 @@ async function runWithRetry(
 
 // ── Server function: text extraction (llama-3.3-70b) ─────────────────────────
 export const extractFromText = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => TextInputSchema.parse(d))
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
+    const quotaError = await assertWithinQuota(context);
+    if (quotaError) return { ok: false as const, error: quotaError };
+
     const apiKey = (process.env.GROQ_API_KEY || "").trim();
     if (!apiKey) return { ok: false as const, error: "Server misconfigured (missing GROQ_API_KEY)." };
     if (!apiKey.startsWith("gsk_")) return { ok: false as const, error: "Invalid GROQ_API_KEY format — must start with gsk_. Check Vercel environment variables." };
@@ -207,8 +211,12 @@ export const extractFromText = createServerFn({ method: "POST" })
 
 // ── Server function: vision extraction (llama-4-scout) ───────────────────────
 export const extractFromImage = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => ImageInputSchema.parse(d))
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
+    const quotaError = await assertWithinQuota(context);
+    if (quotaError) return { ok: false as const, error: quotaError };
+
     const apiKey = (process.env.GROQ_API_KEY || "").trim();
     if (!apiKey) return { ok: false as const, error: "Server misconfigured (missing GROQ_API_KEY)." };
     if (!apiKey.startsWith("gsk_")) return { ok: false as const, error: "Invalid GROQ_API_KEY format — must start with gsk_. Check Vercel environment variables." };
