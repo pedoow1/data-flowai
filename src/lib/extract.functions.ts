@@ -1,11 +1,25 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { getPlanAndUsage } from "./usage.functions";
+import { ADMIN_EMAIL } from "./config";
 
 // ── Groq configuration ──────────────────────────────────────────────────────
 const TEXT_MODEL   = "llama-3.3-70b-versatile";
-const VISION_MODEL = "llama-4-scout-17b-16e-instruct";
+const VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
 const GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions";
 const TIMEOUT_MS   = 120_000;
+
+async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
+  const isAdminEmail =
+    typeof context.claims?.email === "string" &&
+    context.claims.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+  const usage = await getPlanAndUsage(context.supabase, context.userId, isAdminEmail);
+  if (!usage.unlimited && usage.remaining <= 0) {
+    return "Daily limit reached for your plan. Upgrade to extract more documents.";
+  }
+  return null;
+}
 
 // ── Shared schemas ───────────────────────────────────────────────────────────
 const CellSchema = z.object({ v: z.string(), c: z.number().min(0).max(100) });
