@@ -1,10 +1,10 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
 import { useAuth } from "@/lib/auth";
 import { lovable } from "@/integrations/lovable";
 import { Header } from "@/components/Layout";
 import { PrivacyBadge } from "@/components/Privacy";
-import { LogIn, AlertCircle, Loader2 } from "lucide-react";
+import { LogIn, AlertCircle, Loader2, Mail, Lock } from "lucide-react";
 
 export const Route = createFileRoute("/login")({
   head: () => ({ meta: [{ title: "Sign in — DataFlow AI" }] }),
@@ -13,9 +13,12 @@ export const Route = createFileRoute("/login")({
 
 function LoginPage() {
   const navigate = useNavigate();
-  const { isAuthed, ready } = useAuth();
+  const { isAuthed, ready, login } = useAuth();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -24,19 +27,37 @@ function LoginPage() {
     }
   }, [isAuthed, ready, navigate]);
 
-  const googleSignIn = async () => {
+  const handleEmailLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
     setErr(null);
     setLoading(true);
     try {
-      const res = await lovable.auth.signInWithOAuth("google");
+      const res = await login(email, password);
+      if (!res.ok) {
+        setErr(res.error || "Sign-in failed.");
+      }
+    } catch (error: any) {
+      setErr(error?.message || "An error occurred during sign-in.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const googleSignIn = async () => {
+    setErr(null);
+    setGoogleLoading(true);
+    try {
+      const res = await lovable.auth.signInWithOAuth("google", {
+        redirect_uri: window.location.origin,
+      });
       if ("error" in res && res.error) {
         setErr((res.error as Error).message || "Google sign-in failed.");
-        setLoading(false);
+        setGoogleLoading(false);
       }
-      // If successful, Supabase will redirect automatically
-    } catch (err: any) {
-      setErr(err?.message || "An error occurred during sign-in.");
-      setLoading(false);
+      // If successful, the browser will redirect automatically
+    } catch (error: any) {
+      setErr(error?.message || "An error occurred during sign-in.");
+      setGoogleLoading(false);
     }
   };
 
@@ -66,7 +87,7 @@ function LoginPage() {
           </div>
           <h1 className="text-2xl font-bold tracking-tight">Sign in to DataFlow</h1>
           <p className="text-sm text-muted-foreground mt-1.5">
-            Continue with your Google account to access your documents.
+            Welcome back. Sign in to access your documents.
           </p>
 
           <div className="mt-8 space-y-4">
@@ -77,13 +98,60 @@ function LoginPage() {
               </div>
             )}
 
+            <form onSubmit={handleEmailLogin} className="space-y-3">
+              <div className="relative">
+                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  autoComplete="email"
+                  className="w-full rounded-lg border border-border bg-background/60 pl-10 pr-3 py-3 text-sm outline-none focus:border-lime/60 focus:ring-1 focus:ring-lime/40 transition"
+                />
+              </div>
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <input
+                  type="password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Your password"
+                  autoComplete="current-password"
+                  className="w-full rounded-lg border border-border bg-background/60 pl-10 pr-3 py-3 text-sm outline-none focus:border-lime/60 focus:ring-1 focus:ring-lime/40 transition"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={loading || googleLoading}
+                className="w-full inline-flex items-center justify-center gap-2 bg-lime text-primary-foreground font-semibold py-3 rounded-lg hover:opacity-90 transition disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    Signing in…
+                  </>
+                ) : (
+                  "Sign in"
+                )}
+              </button>
+            </form>
+
+            <div className="flex items-center gap-3">
+              <div className="h-px flex-1 bg-border" />
+              <span className="text-xs text-muted-foreground">or</span>
+              <div className="h-px flex-1 bg-border" />
+            </div>
+
             <button
               type="button"
               onClick={googleSignIn}
-              disabled={loading}
+              disabled={loading || googleLoading}
               className="w-full inline-flex items-center justify-center gap-3 bg-white text-black font-semibold py-3 rounded-lg hover:opacity-90 transition disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              {loading ? (
+              {googleLoading ? (
                 <>
                   <Loader2 className="h-5 w-5 animate-spin" />
                   Signing in…
@@ -116,12 +184,9 @@ function LoginPage() {
 
           <p className="mt-8 text-xs text-muted-foreground text-center">
             Don't have an account?{" "}
-            <button
-              onClick={() => navigate({ to: "/signup" })}
-              className="text-lime hover:underline font-medium"
-            >
-              Create one with Google
-            </button>
+            <Link to="/signup" className="text-lime hover:underline font-medium">
+              Create one
+            </Link>
           </p>
 
           <p className="mt-3 text-[10px] text-muted-foreground/70 text-center">
