@@ -271,6 +271,7 @@ function Sidebar({ usage, onUpgrade, tab, setTab, isAdmin }: {
     : usage.cycle === "lifetime"
       ? `You have ${usage.remaining} free extraction${usage.remaining === 1 ? "" : "s"} remaining`
       : `You have ${usage.remaining} upload${usage.remaining === 1 ? "" : "s"} remaining ${remainingLabel}`;
+  const usageDenominator = usage.unlimited ? "∞" : String(usage.limit);
   const items: { id: Tab; i: React.ReactNode; t: string }[] = [
     { id: "extract", i: <Gauge className="h-4 w-4" />, t: "Extract" },
     { id: "history", i: <History className="h-4 w-4" />, t: "History" },
@@ -287,7 +288,7 @@ function Sidebar({ usage, onUpgrade, tab, setTab, isAdmin }: {
         <>
           <div className="mt-3 flex items-baseline gap-1.5">
             <span className="text-3xl font-bold">{usage.used}</span>
-            <span className="text-muted-foreground text-sm">/ {usage.limit}</span>
+            <span className="text-muted-foreground text-sm">/ {usageDenominator}</span>
           </div>
           <div className="mt-3 h-1.5 bg-white/5 rounded-full overflow-hidden">
             <div className={`h-full transition-all ${warning ? "bg-yellow-400" : "bg-lime"}`} style={{ width: `${pct}%` }} />
@@ -297,7 +298,7 @@ function Sidebar({ usage, onUpgrade, tab, setTab, isAdmin }: {
             {subtitle}
           </p>
         </>
-        {usage.plan !== "team" && (
+        {!isAdmin && usage.plan !== "team" && (
           <button onClick={onUpgrade} className="mt-4 w-full inline-flex items-center justify-center gap-1.5 text-xs font-semibold bg-lime text-primary-foreground py-2 rounded-lg hover:opacity-90">
             <Zap className="h-3.5 w-3.5" /> Upgrade
           </button>
@@ -363,8 +364,10 @@ function SettingsView({ email, isAdmin, usage, onUpgrade, onPlanChange }: {
     try {
       await onPlanChange(plan);
       toast.success(`Plan switched to ${plan.toUpperCase()}`);
-    } catch {
-      toast.error("Failed to switch plan");
+    } catch (error) {
+      toast.error("Failed to switch plan", {
+        description: error instanceof Error ? error.message : "Unknown server error",
+      });
     } finally {
       setChangingPlan(false);
     }
@@ -385,8 +388,8 @@ function SettingsView({ email, isAdmin, usage, onUpgrade, onPlanChange }: {
 
         {isAdmin && (
           <Card title="Admin — Switch Plan">
-            <p className="text-xs text-muted-foreground mb-3">Switch your active plan (you stay unlimited regardless).</p>
-            <div className="flex gap-2">
+            <p className="text-xs text-muted-foreground mb-3">Switch your active plan to simulate each customer tier exactly as it behaves.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               {(["free", "pro", "team"] as const).map((p) => (
                 <button
                   key={p}
