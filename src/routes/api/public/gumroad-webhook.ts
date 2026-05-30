@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { supabaseAdmin, hasAdminClient } from "@/integrations/supabase/client.server";
-import { GUMROAD_PRODUCT_TO_PLAN, type Plan } from "@/lib/config";
+import { GUMROAD_PRODUCT_TO_PLAN, getNextPeriodDates, type Plan } from "@/lib/config";
 
 export const Route = createFileRoute("/api/public/gumroad-webhook")({
   server: {
@@ -49,6 +49,7 @@ export const Route = createFileRoute("/api/public/gumroad-webhook")({
         }
 
         const status = isCancel ? "cancelled" : "active";
+        const { start, end } = getNextPeriodDates();
 
         try {
           const { data: profile, error: profileErr } = await supabaseAdmin
@@ -67,6 +68,8 @@ export const Route = createFileRoute("/api/public/gumroad-webhook")({
                 status,
                 gumroad_sale_id: saleId,
                 gumroad_subscription_id: subId,
+                current_period_start: isCancel || newPlan === "free" ? null : start,
+                current_period_end: isCancel || newPlan === "free" ? null : end,
                 updated_at: new Date().toISOString(),
               },
               { onConflict: "user_id" },
@@ -79,6 +82,8 @@ export const Route = createFileRoute("/api/public/gumroad-webhook")({
                 plan: newPlan,
                 gumroad_sale_id: saleId,
                 gumroad_subscription_id: subId,
+                current_period_start: start,
+                current_period_end: end,
               },
               { onConflict: "email" },
             );
