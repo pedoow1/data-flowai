@@ -15,7 +15,7 @@ import { extractPdfText, pdfPageToImageDataUrl, imageFileToDataUrl } from "@/lib
 import { getMyUsage, recordUpload, setAdminPlan } from "@/lib/usage.functions";
 import { exportJSON, exportCSV, exportXLSX } from "@/lib/exporters";
 import { track, identify } from "@/lib/analytics";
-import { History, Settings, Gauge, Zap, Sparkles, Trash2, FileText, AlertTriangle, Infinity as InfinityIcon } from "lucide-react";
+import { History, Settings, Gauge, Zap, Sparkles, Trash2, FileText, AlertTriangle } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard")({
   head: () => ({ meta: [{ title: "Dashboard — DataFlow AI" }] }),
@@ -266,6 +266,11 @@ function Sidebar({ usage, onUpgrade, tab, setTab, isAdmin }: {
   const pct = usage.unlimited ? 0 : Math.min(100, (usage.used / Math.max(1, usage.limit)) * 100);
   const usageHeading = usage.cycle === "monthly" ? "Monthly usage" : usage.cycle === "lifetime" ? "Plan usage" : "Daily usage";
   const remainingLabel = usage.cycle === "monthly" ? "this billing month" : usage.cycle === "lifetime" ? "on this free plan" : "today";
+  const subtitle = usage.cycle === "monthly"
+    ? `You have ${usage.remaining} upload${usage.remaining === 1 ? "" : "s"} remaining ${remainingLabel}`
+    : usage.cycle === "lifetime"
+      ? `You have ${usage.remaining} free extraction${usage.remaining === 1 ? "" : "s"} remaining`
+      : `You have ${usage.remaining} upload${usage.remaining === 1 ? "" : "s"} remaining ${remainingLabel}`;
   const items: { id: Tab; i: React.ReactNode; t: string }[] = [
     { id: "extract", i: <Gauge className="h-4 w-4" />, t: "Extract" },
     { id: "history", i: <History className="h-4 w-4" />, t: "History" },
@@ -279,29 +284,19 @@ function Sidebar({ usage, onUpgrade, tab, setTab, isAdmin }: {
           <span>{usageHeading}</span>
           <span className="text-lime font-mono">{usage.plan.toUpperCase()}</span>
         </div>
-        {usage.unlimited ? (
-          <>
-            <div className="mt-3 flex items-baseline gap-1.5">
-              <span className="text-3xl font-bold">{usage.used}</span>
-              <span className="text-muted-foreground text-sm inline-flex items-center gap-1">/ <InfinityIcon className="h-4 w-4" /></span>
-            </div>
-            <p className="mt-3 text-xs text-lime">Unlimited uploads on Team plan</p>
-          </>
-        ) : (
-          <>
-            <div className="mt-3 flex items-baseline gap-1.5">
-              <span className="text-3xl font-bold">{usage.used}</span>
-              <span className="text-muted-foreground text-sm">/ {usage.limit}</span>
-            </div>
-            <div className="mt-3 h-1.5 bg-white/5 rounded-full overflow-hidden">
-              <div className={`h-full transition-all ${warning ? "bg-yellow-400" : "bg-lime"}`} style={{ width: `${pct}%` }} />
-            </div>
-            <p className={`mt-2 text-xs flex items-center gap-1 ${warning ? "text-yellow-400" : "text-muted-foreground"}`}>
-              {warning && <AlertTriangle className="h-3 w-3" />}
-              You have {usage.remaining} upload{usage.remaining === 1 ? "" : "s"} remaining {remainingLabel}
-            </p>
-          </>
-        )}
+        <>
+          <div className="mt-3 flex items-baseline gap-1.5">
+            <span className="text-3xl font-bold">{usage.used}</span>
+            <span className="text-muted-foreground text-sm">/ {usage.limit}</span>
+          </div>
+          <div className="mt-3 h-1.5 bg-white/5 rounded-full overflow-hidden">
+            <div className={`h-full transition-all ${warning ? "bg-yellow-400" : "bg-lime"}`} style={{ width: `${pct}%` }} />
+          </div>
+          <p className={`mt-2 text-xs flex items-center gap-1 ${warning ? "text-yellow-400" : "text-muted-foreground"}`}>
+            {warning && <AlertTriangle className="h-3 w-3" />}
+            {subtitle}
+          </p>
+        </>
         {usage.plan !== "team" && (
           <button onClick={onUpgrade} className="mt-4 w-full inline-flex items-center justify-center gap-1.5 text-xs font-semibold bg-lime text-primary-foreground py-2 rounded-lg hover:opacity-90">
             <Zap className="h-3.5 w-3.5" /> Upgrade
@@ -412,7 +407,7 @@ function SettingsView({ email, isAdmin, usage, onUpgrade, onPlanChange }: {
 
         <Card title={usage.cycle === "monthly" ? "Usage (current month)" : usage.cycle === "lifetime" ? "Usage (free plan)" : "Usage (last 24 hours)"}>
           <Row label="Uploads used" value={String(usage.used)} />
-          <Row label="Remaining" value={usage.unlimited ? "Unlimited" : String(usage.remaining)} />
+          <Row label="Remaining" value={String(usage.remaining)} />
           <Row label={usage.cycle === "monthly" ? "Monthly limit" : usage.cycle === "lifetime" ? "Free plan limit" : "Daily limit"} value={usage.unlimited ? "Unlimited" : String(usage.limit)} />
           {!isAdmin && usage.plan !== "team" && (
             <button onClick={onUpgrade} className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold bg-lime text-primary-foreground px-3 py-1.5 rounded-lg hover:opacity-90">

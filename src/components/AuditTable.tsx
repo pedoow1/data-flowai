@@ -118,8 +118,8 @@ export function AuditTable({
   );
 }
 
-function ExportBtn({ label, icon, onClick, locked, primary }: {
-  label: string; icon: React.ReactNode; onClick: () => void; locked?: boolean; primary?: boolean;
+function ExportBtn({ label, icon, onClick, primary }: {
+  label: string; icon: React.ReactNode; onClick: () => void; primary?: boolean;
 }) {
   return (
     <button onClick={onClick}
