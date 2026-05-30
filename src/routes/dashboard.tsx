@@ -25,7 +25,18 @@ export const Route = createFileRoute("/dashboard")({
 type Tab = "extract" | "history" | "settings";
 const HISTORY_KEY = "dataflow_history";
 
-type Usage = { plan: "free" | "pro" | "team"; used: number; limit: number; remaining: number; unlimited: boolean; isAdmin?: boolean };
+type Usage = {
+  plan: "free" | "pro" | "team";
+  used: number;
+  limit: number;
+  remaining: number;
+  unlimited: boolean;
+  isAdmin?: boolean;
+  cycle?: "lifetime" | "monthly" | "daily";
+  label?: string;
+  periodStart?: string | null;
+  periodEnd?: string | null;
+};
 
 function loadHistory(): ExtractedRow[] {
   try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); } catch { return []; }
@@ -70,8 +81,8 @@ function Dashboard() {
     if (!email) return;
 
     if (!usage.unlimited && usage.remaining <= 0) {
-      toast.error("Daily limit reached", {
-        description: `You've used all ${usage.limit} uploads today on the ${usage.plan.toUpperCase()} plan.`,
+      toast.error("Usage limit reached", {
+        description: `You've used all ${usage.limit} uploads available on the ${usage.plan.toUpperCase()} plan.`,
         action: { label: "Upgrade", onClick: () => setUpgrade(true) },
       });
       return;
@@ -143,7 +154,7 @@ function Dashboard() {
       toast.success("Extraction complete", { description: `${file.name} processed in ${((Date.now() - started) / 1000).toFixed(1)}s` });
 
       if (!recorded.usage.unlimited && recorded.usage.remaining > 0 && recorded.usage.remaining <= 10) {
-        toast.warning(`You have ${recorded.usage.remaining} upload${recorded.usage.remaining === 1 ? "" : "s"} remaining today`);
+        toast.warning(`You have ${recorded.usage.remaining} upload${recorded.usage.remaining === 1 ? "" : "s"} remaining`);
       }
     } catch (e: unknown) {
       const error = e instanceof Error ? e.message : "Unknown error";
@@ -253,6 +264,8 @@ function Sidebar({ usage, onUpgrade, tab, setTab, isAdmin }: {
   usage: Usage; onUpgrade: () => void; tab: Tab; setTab: (t: Tab) => void; isAdmin: boolean;
 }) {
   const pct = usage.unlimited ? 0 : Math.min(100, (usage.used / Math.max(1, usage.limit)) * 100);
+  const usageHeading = usage.cycle === "monthly" ? "Monthly usage" : usage.cycle === "lifetime" ? "Plan usage" : "Daily usage";
+  const remainingLabel = usage.cycle === "monthly" ? "this billing month" : usage.cycle === "lifetime" ? "on this free plan" : "today";
   const items: { id: Tab; i: React.ReactNode; t: string }[] = [
     { id: "extract", i: <Gauge className="h-4 w-4" />, t: "Extract" },
     { id: "history", i: <History className="h-4 w-4" />, t: "History" },
@@ -263,7 +276,7 @@ function Sidebar({ usage, onUpgrade, tab, setTab, isAdmin }: {
     <aside className="space-y-4 lg:sticky lg:top-20 self-start">
       <div className="glass rounded-2xl p-5">
         <div className="flex items-center justify-between text-xs text-muted-foreground uppercase tracking-wider">
-          <span>Daily usage</span>
+          <span>{usageHeading}</span>
           <span className="text-lime font-mono">{usage.plan.toUpperCase()}</span>
         </div>
         {usage.unlimited ? (
@@ -285,7 +298,7 @@ function Sidebar({ usage, onUpgrade, tab, setTab, isAdmin }: {
             </div>
             <p className={`mt-2 text-xs flex items-center gap-1 ${warning ? "text-yellow-400" : "text-muted-foreground"}`}>
               {warning && <AlertTriangle className="h-3 w-3" />}
-              You have {usage.remaining} upload{usage.remaining === 1 ? "" : "s"} remaining today
+              You have {usage.remaining} upload{usage.remaining === 1 ? "" : "s"} remaining {remainingLabel}
             </p>
           </>
         )}
@@ -397,10 +410,10 @@ function SettingsView({ email, isAdmin, usage, onUpgrade, onPlanChange }: {
           </Card>
         )}
 
-        <Card title="Usage (last 24 hours)">
+        <Card title={usage.cycle === "monthly" ? "Usage (current month)" : usage.cycle === "lifetime" ? "Usage (free plan)" : "Usage (last 24 hours)"}>
           <Row label="Uploads used" value={String(usage.used)} />
           <Row label="Remaining" value={usage.unlimited ? "Unlimited" : String(usage.remaining)} />
-          <Row label="Daily limit" value={usage.unlimited ? "Unlimited" : String(usage.limit)} />
+          <Row label={usage.cycle === "monthly" ? "Monthly limit" : usage.cycle === "lifetime" ? "Free plan limit" : "Daily limit"} value={usage.unlimited ? "Unlimited" : String(usage.limit)} />
           {!isAdmin && usage.plan !== "team" && (
             <button onClick={onUpgrade} className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold bg-lime text-primary-foreground px-3 py-1.5 rounded-lg hover:opacity-90">
               <Zap className="h-3.5 w-3.5" /> Upgrade for higher limits
