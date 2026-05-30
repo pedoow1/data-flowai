@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { createClient } from "@supabase/supabase-js";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { ADMIN_EMAIL } from "./config";
+import { ADMIN_EMAIL, getNextPeriodDates } from "./config";
 
 function assertAdmin(claimsEmail: string | undefined) {
   if (!claimsEmail || claimsEmail.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
@@ -136,12 +136,20 @@ export const setUserPlan = createServerFn({ method: "POST" })
     assertAdmin(claims.email as string | undefined);
 
     const supabase = getServiceClient();
+    const { start, end } = getNextPeriodDates();
     const { error } = await supabase
       .from("subscriptions")
       .upsert(
-        { user_id: data.userId, plan: data.plan, status: "active", updated_at: new Date().toISOString() },
+        {
+          user_id: data.userId,
+          plan: data.plan,
+          status: "active",
+          current_period_start: data.plan === "free" ? null : start,
+          current_period_end: data.plan === "free" ? null : end,
+          updated_at: new Date().toISOString(),
+        },
         { onConflict: "user_id" }
       );
     if (error) return { ok: false as const, error: error.message };
-    return { ok: true as const };
+    return { ok: true as const, plan: data.plan };
   });

@@ -1,5 +1,4 @@
-import { useState } from "react";
-import { Download, FileJson, FileSpreadsheet, Lock, Sparkles, Loader2 } from "lucide-react";
+import { Download, FileJson, FileSpreadsheet, Sparkles, Loader2 } from "lucide-react";
 
 export type ExtractedRow = {
   id: string;
@@ -81,11 +80,16 @@ export function AuditTable({
           <h3 className="font-semibold text-sm">Extracted Data · <span className="text-muted-foreground font-normal">{rows.length} record{rows.length > 1 ? "s" : ""}</span></h3>
         </div>
         <div className="flex flex-wrap gap-2">
-          <ExportBtn label="JSON" icon={<FileJson className="h-3.5 w-3.5" />} locked={false} onClick={() => onExport("json")} />
-          <ExportBtn label="CSV" icon={<FileSpreadsheet className="h-3.5 w-3.5" />} locked={false} onClick={() => onExport("csv")} />
-          <ExportBtn label="Excel" icon={<Download className="h-3.5 w-3.5" />} locked={false} onClick={() => onExport("xlsx")} primary />
+          <ExportBtn label="JSON" icon={<FileJson className="h-3.5 w-3.5" />} onClick={() => onExport("json")} />
+          <ExportBtn label="CSV" icon={<FileSpreadsheet className="h-3.5 w-3.5" />} onClick={() => onExport("csv")} />
+          <ExportBtn label="Excel" icon={<Download className="h-3.5 w-3.5" />} onClick={() => onExport("xlsx")} primary />
         </div>
       </div>
+      {!locked && (
+        <div className="px-4 py-2 text-xs text-muted-foreground border-b border-border/70 bg-white/[0.02]">
+          اضغط داخل أي خلية لتعديل البيانات يدويًا قبل التحميل.
+        </div>
+      )}
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-white/[0.02] text-xs uppercase tracking-wider text-muted-foreground">
@@ -114,14 +118,14 @@ export function AuditTable({
   );
 }
 
-function ExportBtn({ label, icon, onClick, locked, primary }: {
-  label: string; icon: React.ReactNode; onClick: () => void; locked: boolean; primary?: boolean;
+function ExportBtn({ label, icon, onClick, primary }: {
+  label: string; icon: React.ReactNode; onClick: () => void; primary?: boolean;
 }) {
   return (
     <button onClick={onClick}
       className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition
         ${primary ? "bg-lime text-primary-foreground hover:opacity-90" : "border border-border hover:bg-white/5"}`}>
-      {locked ? <Lock className="h-3.5 w-3.5" /> : icon} {label}
+      {icon} {label}
     </button>
   );
 }
