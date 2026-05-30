@@ -21,7 +21,43 @@ function getServiceClient() {
 
 function isSchemaCacheError(error: { message?: string } | null | undefined) {
   const message = error?.message?.toLowerCase() ?? "";
-  return message.includes("schema cache") && message.includes("current_period_");
+  return (
+    message.includes("current_period_") &&
+    (
+      message.includes("schema cache") ||
+      message.includes("does not exist") ||
+      message.includes("could not find the") ||
+      message.includes("column subscriptions.current_period_") ||
+      message.includes("column pending_subscriptions.current_period_")
+    )
+  );
+}
+
+async function upsertSubscriptionForAdmin(
+  supabase: ReturnType<typeof getServiceClient>,
+  payload: {
+    user_id: string;
+    plan: "free" | "pro" | "team";
+    status: string;
+    current_period_start: string | null;
+    current_period_end: string | null;
+    updated_at: string;
+  },
+) {
+  const fullRes = await supabase.from("subscriptions").upsert(payload, { onConflict: "user_id" });
+  if (!fullRes.error || !isSchemaCacheError(fullRes.error)) {
+    return fullRes;
+  }
+
+  return supabase.from("subscriptions").upsert(
+    {
+      user_id: payload.user_id,
+      plan: payload.plan,
+      status: payload.status,
+      updated_at: payload.updated_at,
+    },
+    { onConflict: "user_id" },
+  );
 }
 
 async function loadSubscriptionsForAdmin(supabase: ReturnType<typeof getServiceClient>) {
@@ -162,19 +198,14 @@ export const setUserPlan = createServerFn({ method: "POST" })
 
     const supabase = getServiceClient();
     const { start, end } = getNextPeriodDates();
-    const { error } = await supabase
-      .from("subscriptions")
-      .upsert(
-        {
-          user_id: data.userId,
-          plan: data.plan,
-          status: "active",
-          current_period_start: data.plan === "free" ? null : start,
-          current_period_end: data.plan === "free" ? null : end,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "user_id" }
-      );
+    const { error } = await upsertSubscriptionForAdmin(supabase, {
+      user_id: data.userId,
+      plan: data.plan,
+      status: "active",
+      current_period_start: data.plan === "free" ? null : start,
+      current_period_end: data.plan === "free" ? null : end,
+      updated_at: new Date().toISOString(),
+    });
     if (error) {
       const friendly = isSchemaCacheError(error)
         ? "The backend is still refreshing its subscription schema. Please try again now."
