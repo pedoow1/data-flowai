@@ -19,6 +19,31 @@ function getServiceClient() {
   });
 }
 
+function isSchemaCacheError(error: { message?: string } | null | undefined) {
+  const message = error?.message?.toLowerCase() ?? "";
+  return message.includes("schema cache") && message.includes("current_period_");
+}
+
+async function loadSubscriptionsForAdmin(supabase: ReturnType<typeof getServiceClient>) {
+  const fullRes = await supabase.from("subscriptions").select("user_id, plan, status, current_period_start, current_period_end");
+  if (!fullRes.error) {
+    return fullRes.data ?? [];
+  }
+  if (!isSchemaCacheError(fullRes.error)) {
+    throw new Error(fullRes.error.message);
+  }
+
+  const fallbackRes = await supabase.from("subscriptions").select("user_id, plan, status");
+  if (fallbackRes.error) {
+    throw new Error(fallbackRes.error.message);
+  }
+  return (fallbackRes.data ?? []).map((row) => ({
+    ...row,
+    current_period_start: null,
+    current_period_end: null,
+  }));
+}
+
 export const getAdminStats = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
@@ -34,7 +59,7 @@ export const getAdminStats = createServerFn({ method: "GET" })
       supabase.from("uploads").select("id", { count: "exact", head: true }).gte("created_at", since24h),
       supabase.from("uploads").select("user_id, created_at").gte("created_at", since7d),
       supabase.from("support_tickets").select("*").order("created_at", { ascending: false }).limit(50),
-      supabase.from("subscriptions").select("user_id, plan, status"),
+      loadSubscriptionsForAdmin(supabase),
     ]);
 
     const authUsers = authUsersRes.data?.users ?? [];
@@ -68,7 +93,7 @@ export const getAdminStats = createServerFn({ method: "GET" })
       .slice(0, 10);
 
     const planCounts = { free: 0, pro: 0, team: 0 } as Record<string, number>;
-    for (const s of subs.data ?? []) planCounts[s.plan as string] = (planCounts[s.plan as string] ?? 0) + 1;
+    for (const s of subs ?? []) planCounts[s.plan as string] = (planCounts[s.plan as string] ?? 0) + 1;
 
     return {
       totalUsers:   authUsers.length,
@@ -100,14 +125,14 @@ export const getAdminUsers = createServerFn({ method: "GET" })
 
     const [authUsersRes, subsRes, uploadsRes] = await Promise.all([
       supabase.auth.admin.listUsers({ perPage: 1000 }),
-      supabase.from("subscriptions").select("user_id, plan, status"),
+      loadSubscriptionsForAdmin(supabase),
       supabase.from("uploads").select("user_id").gte("created_at", since24h),
     ]);
 
     const authUsers = authUsersRes.data?.users ?? [];
 
     const subByUser: Record<string, { plan: string; status: string }> = {};
-    for (const s of subsRes.data ?? []) {
+    for (const s of subsRes ?? []) {
       subByUser[s.user_id as string] = { plan: s.plan as string, status: s.status as string };
     }
 
@@ -150,6 +175,11 @@ export const setUserPlan = createServerFn({ method: "POST" })
         },
         { onConflict: "user_id" }
       );
-    if (error) return { ok: false as const, error: error.message };
+    if (error) {
+      const friendly = isSchemaCacheError(error)
+        ? "The backend is still refreshing its subscription schema. Please try again now."
+        : error.message;
+      return { ok: false as const, error: friendly };
+    }
     return { ok: true as const, plan: data.plan };
   });
