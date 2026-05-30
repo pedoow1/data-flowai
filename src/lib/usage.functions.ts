@@ -28,13 +28,74 @@ type UsageSummary = {
 
 function isSchemaCacheError(error: { message?: string } | null | undefined) {
   const message = error?.message?.toLowerCase() ?? "";
-  return message.includes("schema cache") && message.includes("current_period_");
+  return (
+    message.includes("current_period_") &&
+    (
+      message.includes("schema cache") ||
+      message.includes("does not exist") ||
+      message.includes("could not find the") ||
+      message.includes("column subscriptions.current_period_") ||
+      message.includes("column pending_subscriptions.current_period_")
+    )
+  );
+}
+
+function addMonth(iso: string) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setMonth(date.getMonth() + 1);
+  return date.toISOString();
+}
+
+function inferPeriodBounds(plan: Plan, updatedAt?: string | null) {
+  if (plan === "free") {
+    return { start: null, end: null };
+  }
+
+  const fallbackStart = updatedAt && !Number.isNaN(new Date(updatedAt).getTime())
+    ? new Date(updatedAt).toISOString()
+    : new Date().toISOString();
+
+  return {
+    start: fallbackStart,
+    end: addMonth(fallbackStart),
+  };
+}
+
+async function upsertSubscriptionWithFallback(
+  supabase: ReturnType<typeof getServiceClient>,
+  payload: {
+    user_id: string;
+    plan: Plan;
+    status: string;
+    current_period_start: string | null;
+    current_period_end: string | null;
+    updated_at: string;
+  },
+) {
+  const fullRes = await supabase
+    .from("subscriptions")
+    .upsert(payload, { onConflict: "user_id" });
+
+  if (!fullRes.error || !isSchemaCacheError(fullRes.error)) {
+    return fullRes;
+  }
+
+  return supabase.from("subscriptions").upsert(
+    {
+      user_id: payload.user_id,
+      plan: payload.plan,
+      status: payload.status,
+      updated_at: payload.updated_at,
+    },
+    { onConflict: "user_id" },
+  );
 }
 
 async function loadSubscriptionState(supabase: any, userId: string) {
   const fullRes = await supabase
     .from("subscriptions")
-    .select("plan, status, current_period_start, current_period_end")
+    .select("plan, status, current_period_start, current_period_end, updated_at")
     .eq("user_id", userId)
     .maybeSingle();
 
@@ -44,6 +105,7 @@ async function loadSubscriptionState(supabase: any, userId: string) {
       status: fullRes.data?.status as string | undefined,
       currentPeriodStart: fullRes.data?.current_period_start ?? null,
       currentPeriodEnd: fullRes.data?.current_period_end ?? null,
+      updatedAt: fullRes.data?.updated_at ?? null,
     };
   }
 
@@ -53,7 +115,7 @@ async function loadSubscriptionState(supabase: any, userId: string) {
 
   const fallbackRes = await supabase
     .from("subscriptions")
-    .select("plan, status")
+    .select("plan, status, updated_at")
     .eq("user_id", userId)
     .maybeSingle();
 
@@ -66,6 +128,7 @@ async function loadSubscriptionState(supabase: any, userId: string) {
     status: fallbackRes.data?.status as string | undefined,
     currentPeriodStart: null,
     currentPeriodEnd: null,
+    updatedAt: fallbackRes.data?.updated_at ?? null,
   };
 }
 
@@ -82,11 +145,14 @@ async function resolveEffectivePlan(supabase: any, userId: string, isAdminOverri
   const isAdmin = isAdminOverride || !!adminRes.data;
   const rawPlan = subscriptionState.plan ?? "free";
   const status = subscriptionState.status ?? "active";
-  const currentPeriodStart = subscriptionState.currentPeriodStart;
-  const currentPeriodEnd = subscriptionState.currentPeriodEnd;
+  const inferredBounds = inferPeriodBounds(rawPlan, subscriptionState.updatedAt);
+  const currentPeriodStart = subscriptionState.currentPeriodStart ?? inferredBounds.start;
+  const currentPeriodEnd = subscriptionState.currentPeriodEnd ?? inferredBounds.end;
 
   const isPaidPlan = rawPlan === "pro" || rawPlan === "team";
-  const isSubscriptionActive = status === "active" && isValidActivePeriod(currentPeriodEnd);
+  const isSubscriptionActive = status === "active" && (
+    subscriptionState.currentPeriodEnd == null ? true : isValidActivePeriod(currentPeriodEnd)
+  );
   const effectivePlan: Plan = isPaidPlan && !isSubscriptionActive ? "free" : rawPlan;
 
   return {
@@ -221,19 +287,14 @@ export const setAdminPlan = createServerFn({ method: "POST" })
     // INSERT/UPDATE RLS policy, so a token-scoped client cannot upsert.
     const admin = getServiceClient();
     const { start, end } = getNextPeriodDates();
-    const { error } = await admin
-      .from("subscriptions")
-      .upsert(
-        {
-          user_id: userId,
-          plan: data.plan,
-          status: "active",
-          current_period_start: data.plan === "free" ? null : start,
-          current_period_end: data.plan === "free" ? null : end,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "user_id" }
-      );
+    const { error } = await upsertSubscriptionWithFallback(admin, {
+      user_id: userId,
+      plan: data.plan,
+      status: "active",
+      current_period_start: data.plan === "free" ? null : start,
+      current_period_end: data.plan === "free" ? null : end,
+      updated_at: new Date().toISOString(),
+    });
     if (error) {
       const friendly = isSchemaCacheError(error)
         ? "The backend is still refreshing its subscription schema. Please try again now."
