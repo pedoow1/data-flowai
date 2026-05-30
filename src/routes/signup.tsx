@@ -4,22 +4,25 @@ import { useAuth } from "@/lib/auth";
 import { lovable } from "@/integrations/lovable";
 import { Header } from "@/components/Layout";
 import { PrivacyBadge } from "@/components/Privacy";
-import { UserPlus, AlertCircle, MailCheck, Loader2, CheckCircle2 } from "lucide-react";
+import { UserPlus, AlertCircle, MailCheck, Loader2, Mail, Lock } from "lucide-react";
 
 export const Route = createFileRoute("/signup")({
   head: () => ({ meta: [{ title: "Create account — DataFlow AI" }] }),
   component: SignupPage,
 });
 
-type SignupStep = "oauth" | "success";
+type SignupStep = "form" | "verify";
 
 function SignupPage() {
   const navigate = useNavigate();
-  const { isAuthed, ready } = useAuth();
-  
-  const [step, setStep] = useState<SignupStep>("oauth");
+  const { isAuthed, ready, signup } = useAuth();
+
+  const [step, setStep] = useState<SignupStep>("form");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -28,19 +31,39 @@ function SignupPage() {
     }
   }, [isAuthed, ready, navigate]);
 
-  const googleSignUp = async () => {
+  const handleEmailSignup = async (e: React.FormEvent) => {
+    e.preventDefault();
     setErr(null);
     setLoading(true);
     try {
-      const res = await lovable.auth.signInWithOAuth("google");
+      const res = await signup(email, password);
+      if (!res.ok) {
+        setErr(res.error || "Sign-up failed.");
+      } else {
+        setStep("verify");
+      }
+    } catch (error: any) {
+      setErr(error?.message || "An error occurred during sign-up.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const googleSignUp = async () => {
+    setErr(null);
+    setGoogleLoading(true);
+    try {
+      const res = await lovable.auth.signInWithOAuth("google", {
+        redirect_uri: window.location.origin,
+      });
       if ("error" in res && res.error) {
         setErr((res.error as Error).message || "Google sign-up failed.");
-        setLoading(false);
+        setGoogleLoading(false);
       }
-      // If successful, Supabase will redirect automatically
-    } catch (err: any) {
-      setErr(err?.message || "An error occurred during sign-up.");
-      setLoading(false);
+      // If successful, the browser will redirect automatically
+    } catch (error: any) {
+      setErr(error?.message || "An error occurred during sign-up.");
+      setGoogleLoading(false);
     }
   };
 
@@ -65,15 +88,14 @@ function SignupPage() {
         <div className="absolute inset-0 grid-bg opacity-30" />
         <div className="absolute inset-0 radial-lime" />
         <div className="relative glass-strong w-full max-w-md rounded-2xl p-8">
-          {/* OAuth Sign Up Step */}
-          {step === "oauth" && (
+          {step === "form" && (
             <>
               <div className="h-12 w-12 rounded-xl bg-lime/10 border border-lime/30 flex items-center justify-center mb-5">
                 <UserPlus className="h-5 w-5 text-lime" />
               </div>
               <h1 className="text-2xl font-bold tracking-tight">Create your account</h1>
               <p className="text-sm text-muted-foreground mt-1.5">
-                Sign up with Google to start extracting documents. No credit card required.
+                Start extracting documents. No credit card required.
               </p>
 
               <div className="mt-8 space-y-4">
@@ -84,13 +106,61 @@ function SignupPage() {
                   </div>
                 )}
 
+                <form onSubmit={handleEmailSignup} className="space-y-3">
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <input
+                      type="email"
+                      required
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="you@example.com"
+                      autoComplete="email"
+                      className="w-full rounded-lg border border-border bg-background/60 pl-10 pr-3 py-3 text-sm outline-none focus:border-lime/60 focus:ring-1 focus:ring-lime/40 transition"
+                    />
+                  </div>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <input
+                      type="password"
+                      required
+                      minLength={6}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="At least 6 characters"
+                      autoComplete="new-password"
+                      className="w-full rounded-lg border border-border bg-background/60 pl-10 pr-3 py-3 text-sm outline-none focus:border-lime/60 focus:ring-1 focus:ring-lime/40 transition"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={loading || googleLoading}
+                    className="w-full inline-flex items-center justify-center gap-2 bg-lime text-primary-foreground font-semibold py-3 rounded-lg hover:opacity-90 transition disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {loading ? (
+                      <>
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                        Creating account…
+                      </>
+                    ) : (
+                      "Create account"
+                    )}
+                  </button>
+                </form>
+
+                <div className="flex items-center gap-3">
+                  <div className="h-px flex-1 bg-border" />
+                  <span className="text-xs text-muted-foreground">or</span>
+                  <div className="h-px flex-1 bg-border" />
+                </div>
+
                 <button
                   type="button"
                   onClick={googleSignUp}
-                  disabled={loading}
+                  disabled={loading || googleLoading}
                   className="w-full inline-flex items-center justify-center gap-3 bg-white text-black font-semibold py-3 rounded-lg hover:opacity-90 transition disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  {loading ? (
+                  {googleLoading ? (
                     <>
                       <Loader2 className="h-5 w-5 animate-spin" />
                       Creating account…
@@ -134,31 +204,26 @@ function SignupPage() {
             </>
           )}
 
-          {/* Success Step */}
-          {step === "success" && (
+          {step === "verify" && (
             <>
               <div className="h-12 w-12 rounded-xl bg-lime/10 border border-lime/30 flex items-center justify-center mb-5">
-                <CheckCircle2 className="h-5 w-5 text-lime" />
+                <MailCheck className="h-5 w-5 text-lime" />
               </div>
-              <h1 className="text-2xl font-bold tracking-tight text-center">Welcome!</h1>
-              <p className="text-sm text-muted-foreground mt-2 text-center">
-                Your account has been successfully created. You're now ready to start extracting documents.
+              <h1 className="text-2xl font-bold tracking-tight">Check your email</h1>
+              <p className="text-sm text-muted-foreground mt-2">
+                We sent a confirmation link to{" "}
+                <span className="text-foreground font-medium">{email}</span>. Click the link to
+                activate your account, then sign in.
               </p>
 
               <div className="mt-8 flex flex-col gap-2">
                 <Link
-                  to="/dashboard"
+                  to="/login"
                   className="w-full inline-flex items-center justify-center gap-2 bg-lime text-primary-foreground font-semibold py-3 rounded-lg hover:opacity-90 transition"
                 >
-                  Go to Dashboard
+                  Go to sign in
                 </Link>
               </div>
-
-              <p className="mt-6 text-xs text-muted-foreground text-center">
-                <Link to="/login" className="text-lime hover:underline">
-                  Back to sign in
-                </Link>
-              </p>
             </>
           )}
         </div>
