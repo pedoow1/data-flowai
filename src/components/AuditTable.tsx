@@ -125,7 +125,7 @@ function ExportBtn({ label, icon, onClick, locked, primary }: {
     <button onClick={onClick}
       className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition
         ${primary ? "bg-lime text-primary-foreground hover:opacity-90" : "border border-border hover:bg-white/5"}`}>
-      {locked ? <Lock className="h-3.5 w-3.5" /> : icon} {label}
+      {icon} {label}
     </button>
   );
 }
