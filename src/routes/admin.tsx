@@ -199,7 +199,9 @@ function AdminPage() {
                       <div className="text-[11px] text-muted-foreground">#{i + 1}</div>
                       <div className="font-mono text-xs break-all">{u.email}</div>
                     </div>
-                    <span className={`text-[10px] font-semibold border rounded px-1.5 py-0.5 ${PLAN_COLOR[user.plan] ?? PLAN_COLOR.free}`.replace("user.plan", "")}></span>
+                    <span className={`text-[10px] font-semibold border rounded px-1.5 py-0.5 ${PLAN_COLOR[u.plan] ?? PLAN_COLOR.free}`}>
+                      {u.plan.toUpperCase()}
+                    </span>
                   </div>
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     <div><span className="text-muted-foreground block">Uploads 24h</span><span className="font-mono">{u.uploads24h}</span></div>
