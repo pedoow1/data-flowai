@@ -11,9 +11,20 @@ function assertAdmin(claimsEmail: string | undefined) {
 }
 
 function getServiceClient() {
-  const url = process.env.SUPABASE_URL!;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-  if (!url || !key) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  
+  if (!url) throw new Error("Missing SUPABASE_URL environment variable");
+  if (!key) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY environment variable");
+  
+  // Validate that keys are properly formatted
+  if (!url.includes("supabase.co")) {
+    throw new Error(`Invalid SUPABASE_URL format: ${url.slice(0, 20)}...`);
+  }
+  if (key.length < 100) {
+    throw new Error(`Invalid SUPABASE_SERVICE_ROLE_KEY format (too short)`);
+  }
+  
   return createClient(url, key, {
     auth: { storage: undefined, persistSession: false, autoRefreshToken: false },
   });
