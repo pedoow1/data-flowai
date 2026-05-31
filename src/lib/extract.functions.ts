@@ -52,7 +52,7 @@ const ImageInputSchema = z.object({
   fileName:     z.string().min(1).max(255),
 });
 
-// ── System / user prompts ────────────────────────────────────���───────────────
+// ── System / user prompts ────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are a precise invoice and document data extraction engine.
 
 Your task: Extract structured fields from the document and return ONLY valid JSON matching this exact TypeScript type:
@@ -77,6 +77,8 @@ Extraction rules:
 - total: the grand total including tax, including the currency symbol if present.
 - If a field is genuinely not found in the document, set "v" to "—" and "c" to 0.
 - Output ONLY the raw JSON object. No prose, no markdown, no code fences, no explanation.`;
+
+const MINIMAL_PROMPT = `Extract invoice data. Return ONLY valid JSON with fields: invoiceNumber, client, date, amount, tax, total. Each field has "v" (value) and "c" (confidence 0-100). If not found, use "v": "—" and "c": 0.`;
 
 const USER_SUFFIX = `\n\nIMPORTANT: Do not truncate any text, numbers, or company names. Copy every value exactly as it appears in the document, character by character.`;
 
@@ -285,7 +287,7 @@ async function processTextInChunks(
   const chunks = chunkTextWithOverlap(fullText, SAFE_REQUEST_SIZE, CHUNK_OVERLAP);
 
   if (chunks.length === 1) {
-    // Single chunk - process normally
+    // Single chunk - process normally with full prompt
     const messages = [
       {
         role: "user",
@@ -295,7 +297,7 @@ async function processTextInChunks(
     return runWithRetry(token, model, messages);
   }
 
-  // Multiple chunks - process each with context about position
+  // Multiple chunks - use minimal prompt to save tokens
   const results: Array<{ ok: true; row: z.infer<typeof RowSchema> }> = [];
   let consecutiveFailures = 0;
   const maxFailures = 2;
@@ -303,8 +305,7 @@ async function processTextInChunks(
   console.log(`[extract] Processing ${chunks.length} chunks for document: ${fileName} (${fullText.length} chars)`);
 
   for (const chunk of chunks) {
-    const chunkPrompt = `
-${SYSTEM_PROMPT}
+    const chunkPrompt = `${MINIMAL_PROMPT}
 
 Document filename: ${fileName}
 [Chunk ${chunk.chunkNum}/${chunk.totalChunks}]
@@ -314,8 +315,7 @@ ${chunk.chunkNum === chunk.totalChunks ? "This is the END of the document." : ""
 
 ---
 ${chunk.text}
-${USER_SUFFIX}
-`;
+${USER_SUFFIX}`;
 
     const messages = [
       {
@@ -376,8 +376,16 @@ export const extractFromText = createServerFn({ method: "POST" })
       return { ok: false as const, error: "__NEEDS_VISION__" };
     }
 
-    // Automatic chunking + merge for any text larger than safe request size
-    return processTextInChunks(token, TEXT_MODEL, data.text, data.fileName);
+    try {
+      // Automatic chunking + merge for any text larger than safe request size
+      return await processTextInChunks(token, TEXT_MODEL, data.text, data.fileName);
+    } catch (error: any) {
+      console.error("[extract] Unexpected error during text extraction:", error);
+      return { 
+        ok: false as const, 
+        error: error?.message || "An unexpected error occurred during extraction. Please try again." 
+      };
+    }
   });
 
 // ── Server function: vision extraction (gpt-4o - 16384 tokens limit) ────
@@ -392,23 +400,31 @@ export const extractFromImage = createServerFn({ method: "POST" })
     const token = (process.env.GITHUB_TOKEN || "").trim();
     if (!token) return { ok: false as const, error: "Server misconfigured (missing GITHUB_TOKEN)." };
 
-    const messages = [
-      {
-        role: "user",
-        content: [
-          {
-            type: "image_url",
-            image_url: {
-              url: data.imageDataUrl,
+    try {
+      const messages = [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image_url",
+              image_url: {
+                url: data.imageDataUrl,
+              },
             },
-          },
-          {
-            type: "text",
-            text: `${SYSTEM_PROMPT}\n\nDocument filename: ${data.fileName}\n\nExtract all relevant fields from this document image and return ONLY the JSON object.${USER_SUFFIX}`,
-          },
-        ],
-      },
-    ];
+            {
+              type: "text",
+              text: `${SYSTEM_PROMPT}\n\nDocument filename: ${data.fileName}\n\nExtract all relevant fields from this document image and return ONLY the JSON object.${USER_SUFFIX}`,
+            },
+          ],
+        },
+      ];
 
-    return runWithRetry(token, VISION_MODEL, messages);
+      return await runWithRetry(token, VISION_MODEL, messages);
+    } catch (error: any) {
+      console.error("[extract] Unexpected error during image extraction:", error);
+      return { 
+        ok: false as const, 
+        error: error?.message || "An unexpected error occurred during extraction. Please try again." 
+      };
+    }
   });
