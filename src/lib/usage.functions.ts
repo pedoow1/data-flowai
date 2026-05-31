@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { ADMIN_EMAIL, FREE_LIFETIME_LIMIT, PRO_MONTHLY_LIMIT, TEAM_DAILY_LIMIT, getNextPeriodDates, type Plan } from "./config";
+import { ADMIN_EMAIL, FREE_LIFETIME_LIMIT, PRO_MONTHLY_LIMIT, TEAM_MONTHLY_LIMIT, TEAM_DAILY_LIMIT, getNextPeriodDates, type Plan } from "./config";
 import { createClient } from "@supabase/supabase-js";
 
 function getServiceClient() {
@@ -24,6 +24,9 @@ type UsageSummary = {
   label: string;
   periodStart: string | null;
   periodEnd: string | null;
+  dailyUsed?: number;
+  dailyLimit?: number;
+  dailyRemaining?: number;
 };
 
 function isSchemaCacheError(error: { message?: string } | null | undefined) {
@@ -212,24 +215,41 @@ export async function getPlanAndUsage(supabase: any, userId: string, isAdminOver
     } satisfies UsageSummary;
   }
 
+  // Team: 1000 per billing month, with a hard cap of 50 per rolling 24h.
+  const teamPeriodStart = effective.currentPeriodStart ?? new Date(0).toISOString();
+  const teamPeriodEnd = effective.currentPeriodEnd;
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const countRes = await supabase
-    .from("uploads")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", userId)
-    .gte("created_at", since);
-  const used = countRes.count ?? 0;
+  const [monthRes, dayRes] = await Promise.all([
+    supabase
+      .from("uploads")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .gte("created_at", teamPeriodStart)
+      .lt("created_at", teamPeriodEnd ?? "9999-12-31T23:59:59.999Z"),
+    supabase
+      .from("uploads")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .gte("created_at", since),
+  ]);
+  const monthlyUsed = monthRes.count ?? 0;
+  const dailyUsed = dayRes.count ?? 0;
+  const monthlyRemaining = Math.max(0, TEAM_MONTHLY_LIMIT - monthlyUsed);
+  const dailyRemaining = Math.max(0, TEAM_DAILY_LIMIT - dailyUsed);
   return {
     plan: "team",
-    used,
-    limit: TEAM_DAILY_LIMIT,
-    remaining: Math.max(0, TEAM_DAILY_LIMIT - used),
+    used: monthlyUsed,
+    limit: TEAM_MONTHLY_LIMIT,
+    remaining: Math.min(monthlyRemaining, dailyRemaining),
     unlimited: false,
     isAdmin: effective.isAdmin,
-    cycle: "daily",
-    label: "Daily Team extractions",
-    periodStart: effective.currentPeriodStart,
-    periodEnd: effective.currentPeriodEnd,
+    cycle: "monthly",
+    label: "Monthly Team extractions (max 50/day)",
+    periodStart: teamPeriodStart,
+    periodEnd: teamPeriodEnd,
+    dailyUsed,
+    dailyLimit: TEAM_DAILY_LIMIT,
+    dailyRemaining,
   } satisfies UsageSummary;
 }
 
@@ -253,12 +273,15 @@ export const recordUpload = createServerFn({ method: "POST" })
       claims.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
     const usage = await getPlanAndUsage(supabase, userId, isAdminEmail);
     if (!usage.unlimited && usage.remaining <= 0) {
-      const cycleLabel = usage.cycle === "monthly"
-        ? "monthly"
-        : usage.cycle === "daily"
-          ? "daily"
-          : "free-plan";
-      return { ok: false as const, error: `Your ${cycleLabel} limit has been reached.`, usage };
+      let msg: string;
+      if (usage.plan === "team" && (usage.dailyRemaining ?? 1) <= 0) {
+        msg = "You've reached the daily cap of 50 extractions. Please try again tomorrow.";
+      } else if (usage.cycle === "monthly") {
+        msg = "You've reached your monthly extraction limit. It resets at the start of your next billing cycle.";
+      } else {
+        msg = "You've used all your free extractions. Upgrade to continue.";
+      }
+      return { ok: false as const, error: msg, usage };
     }
     const { error } = await supabase.from("uploads").insert({ user_id: userId, file_name: data.fileName });
     if (error) return { ok: false as const, error: error.message, usage };
