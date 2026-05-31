@@ -25,6 +25,14 @@ export const Route = createFileRoute("/dashboard")({
 type Tab = "extract" | "history" | "settings";
 const HISTORY_KEY = "dataflow_history";
 
+// ── Token estimation constants ──────────────────────────────────────────────
+// 1 token ≈ 4 characters (conservative estimate)
+// Model limit: 16,384 tokens
+// Reserve ~3,500 for output → safe input: ~12,800 tokens (~51,200 chars)
+const SAFE_CHAR_LIMIT = 50_000;      // ~12,500 tokens - safe for chunking
+const WARN_CHAR_LIMIT = 100_000;     // ~25,000 tokens - large document warning
+const MAX_CHAR_LIMIT = 6_000_000;    // ~1.5M tokens - absolute maximum
+
 type Usage = {
   plan: "free" | "pro" | "team";
   used: number;
@@ -43,6 +51,11 @@ function loadHistory(): ExtractedRow[] {
 }
 function saveHistory(rows: ExtractedRow[]) {
   localStorage.setItem(HISTORY_KEY, JSON.stringify(rows.slice(0, 200)));
+}
+
+function estimateTokens(text: string): number {
+  // Conservative estimate: 1 token ≈ 4 characters
+  return Math.ceil(text.length / 4);
 }
 
 function Dashboard() {
@@ -80,15 +93,6 @@ function Dashboard() {
   const runExtraction = async (file: File) => {
     if (!email) return;
 
-    // ✅ Check file size early
-    const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
-    if (file.size > MAX_FILE_SIZE) {
-      toast.error("File too large", {
-        description: `Maximum file size is 50MB. Your file is ${(file.size / 1024 / 1024).toFixed(1)}MB.`
-      });
-      return;
-    }
-
     if (!usage.unlimited && usage.remaining <= 0) {
       toast.error("Usage limit reached", {
         description: `You've used all ${usage.limit} uploads available on the ${usage.plan.toUpperCase()} plan.`,
@@ -115,9 +119,10 @@ function Dashboard() {
         toast.info("Processing image…");
         try {
           const imageDataUrl = await imageFileToDataUrl(file);
-          // ✅ Check if data URL is too large
-          if (imageDataUrl.length > 20_000_000) {
-            throw new Error("Image too large to process. Please use a smaller image.");
+          // ✅ Check if data URL is too large (estimate: 4/3 for base64 encoding)
+          const estimatedDataUrlSize = imageDataUrl.length;
+          if (estimatedDataUrlSize > 20_000_000) {
+            throw new Error("Image too large to process. Please use a smaller image (max ~15MB effective).");
           }
           res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
         } catch (e) {
@@ -134,14 +139,26 @@ function Dashboard() {
         }
 
         pages = extracted.pages;
+        const charCount = extracted.text.length;
+        const tokenEstimate = estimateTokens(charCount);
 
-        // ✅ Check if extracted text is reasonable
-        if (extracted.text.length < 20) {
+        // ✅ Check if text content is reasonable (based on character/token count)
+        if (charCount < 20) {
           toast.info("Scanned PDF detected — switching to vision model…");
           const imageDataUrl = await pdfPageToImageDataUrl(file, 1);
           res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
-        } else if (extracted.text.length > 6_000_000) {
-          throw new Error("PDF text is too large (>6MB). Please try a smaller document.");
+        } else if (charCount > MAX_CHAR_LIMIT) {
+          throw new Error(`Document text too large (${charCount.toLocaleString()} characters, ~${tokenEstimate.toLocaleString()} tokens). Maximum is 6M characters (~1.5M tokens).`);
+        } else if (charCount > WARN_CHAR_LIMIT) {
+          // ✅ Warn about large documents but allow processing (chunking will handle it)
+          toast.warning(`Large document: ${charCount.toLocaleString()} chars (~${tokenEstimate.toLocaleString()} tokens). This will be split into multiple chunks and take longer to process.`);
+          res = (await extract({ data: { text: extracted.text, fileName: file.name } })) as AIResult;
+
+          if (!res.ok && res.error === "__NEEDS_VISION__") {
+            toast.info("Scanned PDF detected — switching to vision model…");
+            const imageDataUrl = await pdfPageToImageDataUrl(file, 1);
+            res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
+          }
         } else {
           res = (await extract({ data: { text: extracted.text, fileName: file.name } })) as AIResult;
 
