@@ -1,4 +1,6 @@
-import { Download, FileJson, FileSpreadsheet, Sparkles, Loader2 } from "lucide-react";
+import { Download, FileJson, FileSpreadsheet, Sparkles, Loader2, Lock } from "lucide-react";
+import { isExportFormatAllowed, getExportFormatLabel, type ExportFormat } from "@/lib/exporters";
+import { toast } from "sonner";
 
 export type ExtractedRow = {
   id: string;
@@ -59,18 +61,29 @@ function EditableCell({ cell, onChange }: { cell: Cell; onChange: (v: string) =>
 }
 
 export function AuditTable({
-  rows, setRows, onExport, locked,
+  rows, setRows, onExport, locked, plan = "free",
 }: {
   rows: ExtractedRow[];
   setRows: (r: ExtractedRow[]) => void;
   onExport: (fmt: "json" | "csv" | "xlsx") => void;
   locked: boolean;
+  plan?: "free" | "pro" | "team";
 }) {
   const update = (id: string, key: keyof Omit<ExtractedRow, "id" | "fileName">, v: string) => {
     setRows(rows.map(r => r.id === id ? { ...r, [key]: { ...(r[key] as Cell), v, c: 100 } } : r));
   };
 
   if (rows.length === 0) return null;
+
+  const handleExport = (fmt: ExportFormat) => {
+    if (!isExportFormatAllowed(plan, fmt)) {
+      toast.error(`${getExportFormatLabel(fmt)} export not available`, {
+        description: `Upgrade to ${fmt === "json" ? "Team" : "Pro"} plan to export as ${getExportFormatLabel(fmt)}.`,
+      });
+      return;
+    }
+    onExport(fmt);
+  };
 
   return (
     <div className="mt-6 glass rounded-2xl overflow-hidden">
@@ -80,9 +93,27 @@ export function AuditTable({
           <h3 className="font-semibold text-sm">Extracted Data · <span className="text-muted-foreground font-normal">{rows.length} record{rows.length > 1 ? "s" : ""}</span></h3>
         </div>
         <div className="flex flex-wrap gap-2">
-          <ExportBtn label="JSON" icon={<FileJson className="h-3.5 w-3.5" />} onClick={() => onExport("json")} />
-          <ExportBtn label="CSV" icon={<FileSpreadsheet className="h-3.5 w-3.5" />} onClick={() => onExport("csv")} />
-          <ExportBtn label="Excel" icon={<Download className="h-3.5 w-3.5" />} onClick={() => onExport("xlsx")} primary />
+          <ExportBtn 
+            label="JSON" 
+            icon={<FileJson className="h-3.5 w-3.5" />} 
+            onClick={() => handleExport("json")}
+            disabled={!isExportFormatAllowed(plan, "json")}
+            locked={!isExportFormatAllowed(plan, "json")}
+          />
+          <ExportBtn 
+            label="CSV" 
+            icon={<FileSpreadsheet className="h-3.5 w-3.5" />} 
+            onClick={() => handleExport("csv")}
+            disabled={!isExportFormatAllowed(plan, "csv")}
+            locked={!isExportFormatAllowed(plan, "csv")}
+          />
+          <ExportBtn 
+            label="Excel" 
+            icon={<Download className="h-3.5 w-3.5" />} 
+            onClick={() => handleExport("xlsx")}
+            primary 
+            disabled={!isExportFormatAllowed(plan, "xlsx")}
+          />
         </div>
       </div>
       {!locked && (
@@ -118,14 +149,21 @@ export function AuditTable({
   );
 }
 
-function ExportBtn({ label, icon, onClick, primary }: {
-  label: string; icon: React.ReactNode; onClick: () => void; primary?: boolean;
+function ExportBtn({ label, icon, onClick, primary, disabled, locked }: {
+  label: string; icon: React.ReactNode; onClick: () => void; primary?: boolean; disabled?: boolean; locked?: boolean;
 }) {
   return (
-    <button onClick={onClick}
-      className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition
-        ${primary ? "bg-lime text-primary-foreground hover:opacity-90" : "border border-border hover:bg-white/5"}`}>
+    <button 
+      onClick={onClick}
+      disabled={disabled}
+      className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition relative
+        ${disabled 
+          ? "opacity-50 cursor-not-allowed border border-border/30" 
+          : primary 
+            ? "bg-lime text-primary-foreground hover:opacity-90" 
+            : "border border-border hover:bg-white/5"}`}>
       {icon} {label}
+      {locked && <Lock className="h-2.5 w-2.5 ml-0.5" />}
     </button>
   );
 }
