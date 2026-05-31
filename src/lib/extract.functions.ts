@@ -6,16 +6,18 @@ import { ADMIN_EMAIL } from "./config";
 
 // ── API configuration ────────────────────────────────────────────────────────
 // GitHub Models API (Free tier from GitHub)
-// Text extraction: gpt-4o-mini (128K context for text processing)
-// Vision extraction: gpt-4o (128K context - advanced vision understanding + reasoning)
-const TEXT_MODEL = "gpt-4o-mini";              // 128K tokens context
-const VISION_MODEL = "gpt-4o";                 // 128K tokens context - best vision model
+// Text extraction: gpt-4o-mini (max 16,384 completion tokens)
+// Vision extraction: gpt-4o (max 16,384 completion tokens)
+const TEXT_MODEL = "gpt-4o-mini";              // max 16,384 tokens output
+const VISION_MODEL = "gpt-4o";                 // max 16,384 tokens output
 const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
+const MAX_COMPLETION_TOKENS = 16384;           // Model's actual limit
 
 // Safe limits to avoid hitting token limits
-// Each request should stay well under the model's token limit
-const SAFE_REQUEST_SIZE = 50_000;  // ~12.5K tokens (conservative estimate: 1 token ≈ 4 chars)
+// Estimate input tokens conservatively (1 token ≈ 4 chars)
+// Reserve budget for response, use ~60% of input budget
+const SAFE_REQUEST_SIZE = 50_000;  // ~12.5K tokens input (conservative)
 const CHUNK_OVERLAP = 2_000;  // Character overlap between chunks for context continuity
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
@@ -50,7 +52,7 @@ const ImageInputSchema = z.object({
   fileName:     z.string().min(1).max(255),
 });
 
-// ── System / user prompts ────────────────────────────────────────────────────
+// ── System / user prompts ────────────────────────────────────���───────────────
 const SYSTEM_PROMPT = `You are a precise invoice and document data extraction engine.
 
 Your task: Extract structured fields from the document and return ONLY valid JSON matching this exact TypeScript type:
@@ -99,7 +101,7 @@ async function callGitHubModels(
         model,
         messages,
         temperature: 0.0,  // Deterministic output (no top_p with temperature 0)
-        max_tokens: 128000,  // Let model use full context
+        max_tokens: MAX_COMPLETION_TOKENS,  // Respect model's actual limit
       }),
     });
     return { status: res.status, bodyText: await res.text() };
@@ -358,7 +360,7 @@ ${USER_SUFFIX}
   return { ok: true, row: mergedRow };
 }
 
-// ── Server function: text extraction (gpt-4o-mini - 128K context) ─────
+// ── Server function: text extraction (gpt-4o-mini - 16384 tokens limit) ─────
 // Automatically chunks large documents and merges results for safety
 export const extractFromText = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -378,7 +380,7 @@ export const extractFromText = createServerFn({ method: "POST" })
     return processTextInChunks(token, TEXT_MODEL, data.text, data.fileName);
   });
 
-// ── Server function: vision extraction (gpt-4o - 128K context) ────
+// ── Server function: vision extraction (gpt-4o - 16384 tokens limit) ────
 // Best for complex document images with high extraction accuracy + reasoning
 export const extractFromImage = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
