@@ -6,10 +6,10 @@ import { ADMIN_EMAIL } from "./config";
 
 // ── API configuration ────────────────────────────────────────────────────────
 // GitHub Models API (Free tier from GitHub)
-// Text extraction: Mistral Large (128K context - reads 500+ page documents in one shot!)
-// Vision extraction: Phi-4 (advanced vision understanding with high accuracy)
-const TEXT_MODEL = "mistral-large";      // 128K tokens = ~500K words = entire books
-const VISION_MODEL = "phi-4";             // Best vision model for complex document images
+// Text extraction: Mistral Medium 2505 (128K context - reads 500+ page documents)
+// Vision extraction: Phi-4 Reasoning (advanced vision understanding + reasoning)
+const TEXT_MODEL = "mistral-ai/mistral-medium-2505";      // 128K tokens context
+const VISION_MODEL = "microsoft/Phi-4-reasoning";          // Best vision model
 const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
 const MAX_TEXT_CHARS = 4_000_000;  // 4M chars ≈ 1M tokens (leave headroom)
@@ -46,7 +46,7 @@ const ImageInputSchema = z.object({
   fileName:     z.string().min(1).max(255),
 });
 
-// ���─ System / user prompts ────────────────────────────────────────────────────
+// ── System / user prompts ────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are a precise invoice and document data extraction engine.
 
 Your task: Extract structured fields from the document and return ONLY valid JSON matching this exact TypeScript type:
@@ -194,7 +194,7 @@ async function runWithRetry(
   return { ok: false, error: `${lastError} Please try again.` };
 }
 
-// ── Server function: text extraction (Mistral Large - 128K context) ────────────
+// ── Server function: text extraction (Mistral Medium 2505 - 128K context) ─────
 // Can read entire 500+ page documents in a single request!
 export const extractFromText = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -210,7 +210,7 @@ export const extractFromText = createServerFn({ method: "POST" })
       return { ok: false as const, error: "__NEEDS_VISION__" };
     }
 
-    // Mistral Large: 128K tokens context = ~500,000 words = entire books/documents
+    // Mistral Medium 2505: 128K tokens context = ~500,000 words
     // No need for chunking! Just send the whole thing.
     const processingText = data.text.slice(0, MAX_TEXT_CHARS);
 
@@ -224,8 +224,8 @@ export const extractFromText = createServerFn({ method: "POST" })
     return runWithRetry(token, TEXT_MODEL, messages, 2048);
   });
 
-// ── Server function: vision extraction (Phi-4 - advanced vision + accuracy) ────
-// Best for complex document images with high extraction accuracy
+// ── Server function: vision extraction (Phi-4 Reasoning - advanced vision) ────
+// Best for complex document images with high extraction accuracy + reasoning
 export const extractFromImage = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => ImageInputSchema.parse(d))
