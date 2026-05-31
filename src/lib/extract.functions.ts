@@ -3,12 +3,15 @@ import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { getPlanAndUsage } from "./usage.functions";
 import { ADMIN_EMAIL } from "./config";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
-// ── Groq configuration ──────────────────────────────────────────────────────
-const TEXT_MODEL   = "openai/gpt-oss-120b";  // Upgraded from llama-3.3-70b: 128K context, better accuracy
+// ── API configuration ────────────────────────────────────────────────────────
+// Text extraction: Google Gemini 1.5 Flash (1M free tokens/min)
+// Vision extraction: Groq llama-4-scout (for image processing)
+const GEMINI_MODEL = "gemini-1.5-flash";
 const VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
-const GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions";
-const TIMEOUT_MS   = 120_000;
+const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+const TIMEOUT_MS = 120_000;
 const CHUNK_SIZE_CHARS = 100_000;  // Process in 100K char chunks to respect token limits
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
@@ -22,7 +25,7 @@ async function assertWithinQuota(context: { supabase: unknown; userId: string; c
   return null;
 }
 
-// ── Shared schemas ─────────────────────────────────────────────────────────[...]
+// ── Shared schemas ─────────────────────────────────────────────────────────
 const CellSchema = z.object({ v: z.string(), c: z.number().min(0).max(100) });
 export const RowSchema = z.object({
   invoiceNumber: CellSchema,
@@ -71,7 +74,58 @@ Extraction rules:
 
 const USER_SUFFIX = `\n\nIMPORTANT: Do not truncate any text, numbers, or company names. Copy every value exactly as it appears in the document, character by character.`;
 
-// ── Low-level fetch helper ───────────────────────────────────────────────────
+// ── Google Generative AI helper ──────────────────────────────────────────────
+async function callGemini(
+  apiKey: string,
+  systemPrompt: string,
+  userMessage: string,
+): Promise<{ ok: true; row: z.infer<typeof RowSchema> } | { ok: false; error: string }> {
+  try {
+    const client = new GoogleGenerativeAI(apiKey);
+    const model = client.getGenerativeModel({ model: GEMINI_MODEL });
+    
+    const response = await model.generateContent([
+      { text: `${systemPrompt}\n\n${userMessage}` },
+    ]);
+
+    const content = response.response?.text() ?? "";
+    if (!content) {
+      return { ok: false, error: "Gemini returned empty response." };
+    }
+
+    const cleaned = content.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch {
+      console.error(`[extract/${GEMINI_MODEL}] unparseable content:`, content.slice(0, 300));
+      return { ok: false, error: "AI returned an unparseable response. Please retry." };
+    }
+
+    const validated = RowSchema.safeParse(parsed);
+    if (!validated.success) {
+      console.error(`[extract/${GEMINI_MODEL}] schema mismatch:`, JSON.stringify(validated.error.issues).slice(0, 300));
+      return { ok: false, error: "AI response missing required fields. Please retry." };
+    }
+
+    return { ok: true, row: validated.data };
+  } catch (e: any) {
+    const errorMessage = e?.message ?? "Unknown error";
+    console.error(`[extract/${GEMINI_MODEL}] error:`, errorMessage);
+    
+    if (errorMessage.includes("API key")) {
+      return { ok: false, error: "Gemini authentication failed — check your GOOGLE_API_KEY in Vercel." };
+    }
+    if (errorMessage.includes("rate")) {
+      return { ok: false, error: "Gemini rate limit reached. Please try again later." };
+    }
+    
+    return { ok: false, error: `Gemini error: ${errorMessage.slice(0, 200)}` };
+  }
+}
+
+// ── Low-level fetch helper for Groq (vision only) ───────────────────────────
 async function callGroq(
   apiKey: string,
   body: unknown,
@@ -94,7 +148,7 @@ async function callGroq(
   }
 }
 
-// ── Response parser (shared) ─────────────────────────────────────────────────
+// ── Response parser for Groq ────────────────────────────────────────────────
 function parseGroqResponse(
   status: number,
   bodyText: string,
@@ -124,8 +178,8 @@ function parseGroqResponse(
   return { ok: true, row: validated.data };
 }
 
-// ── Retry wrapper ─────────────────────────────────────────────────────────[...]
-async function runWithRetry(
+// ── Retry wrapper for Groq ──────────────────────────────────────────────────
+async function runGroqWithRetry(
   apiKey: string,
   body: unknown,
   model: string,
@@ -186,7 +240,7 @@ function chunkText(text: string, chunkSize: number): string[] {
   return chunks.length > 0 ? chunks : [""];
 }
 
-// ── Server function: text extraction (openai/gpt-oss-120b) ────────────────────
+// ── Server function: text extraction (Gemini 1.5 Flash) ──────────────────────
 export const extractFromText = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => TextInputSchema.parse(d))
@@ -194,37 +248,23 @@ export const extractFromText = createServerFn({ method: "POST" })
     const quotaError = await assertWithinQuota(context);
     if (quotaError) return { ok: false as const, error: quotaError };
 
-    const apiKey = (process.env.GROQ_API_KEY || "").trim();
-    if (!apiKey) return { ok: false as const, error: "Server misconfigured (missing GROQ_API_KEY)." };
-    if (!apiKey.startsWith("gsk_")) return { ok: false as const, error: "Invalid GROQ_API_KEY format — must start with gsk_. Check Vercel environment variables." };
+    const apiKey = (process.env.GOOGLE_API_KEY || "").trim();
+    if (!apiKey) return { ok: false as const, error: "Server misconfigured (missing GOOGLE_API_KEY)." };
 
     if (data.text.length < 20) {
       return { ok: false as const, error: "__NEEDS_VISION__" };
     }
 
     // For very large documents, chunk and process the most relevant section (first chunk)
-    // to respect Groq free tier token limits (~6K-10K TPM)
     const chunks = chunkText(data.text, CHUNK_SIZE_CHARS);
     const processingText = chunks[0].slice(0, 128_000);  // Use first chunk, capped at 128K chars
 
-    const body = {
-      model: TEXT_MODEL,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        {
-          role: "user",
-          content: `Document filename: ${data.fileName}\n\n---\n${processingText}${USER_SUFFIX}`,
-        },
-      ],
-      temperature:     0.0,
-      max_tokens:      1024,
-      response_format: { type: "json_object" },
-    };
+    const userMessage = `Document filename: ${data.fileName}\n\n---\n${processingText}${USER_SUFFIX}`;
 
-    return runWithRetry(apiKey, body, TEXT_MODEL);
+    return callGemini(apiKey, SYSTEM_PROMPT, userMessage);
   });
 
-// ── Server function: vision extraction (llama-4-scout) ───────────────────────
+// ── Server function: vision extraction (Groq llama-4-scout) ─────────────────
 export const extractFromImage = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => ImageInputSchema.parse(d))
@@ -257,5 +297,5 @@ export const extractFromImage = createServerFn({ method: "POST" })
       max_tokens:  1024,
     };
 
-    return runWithRetry(apiKey, body, VISION_MODEL);
+    return runGroqWithRetry(apiKey, body, VISION_MODEL);
   });
