@@ -278,8 +278,6 @@ export const recordUpload = createServerFn({ method: "POST" })
         msg = "You've reached the daily cap of 50 extractions. Please try again tomorrow.";
       } else if (usage.cycle === "monthly") {
         msg = "You've reached your monthly extraction limit. It resets at the start of your next billing cycle.";
-      } else if (usage.cycle === "daily") {
-        msg = "You've reached your daily extraction limit.";
       } else {
         msg = "You've used all your free extractions. Upgrade to continue.";
       }
