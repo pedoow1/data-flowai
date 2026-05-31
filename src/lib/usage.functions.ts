@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { ADMIN_EMAIL, FREE_LIFETIME_LIMIT, PRO_MONTHLY_LIMIT, TEAM_DAILY_LIMIT, getNextPeriodDates, type Plan } from "./config";
+import { ADMIN_EMAIL, FREE_LIFETIME_LIMIT, PRO_MONTHLY_LIMIT, TEAM_MONTHLY_LIMIT, TEAM_DAILY_LIMIT, getNextPeriodDates, type Plan } from "./config";
 import { createClient } from "@supabase/supabase-js";
 
 function getServiceClient() {
