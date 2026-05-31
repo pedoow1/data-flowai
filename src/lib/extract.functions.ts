@@ -21,7 +21,7 @@ async function assertWithinQuota(context: { supabase: unknown; userId: string; c
   return null;
 }
 
-// ── Shared schemas ───────────────────────────────────────────────────────────
+// ── Shared schemas ─────────────────────────────────────────────────────────[...]
 const CellSchema = z.object({ v: z.string(), c: z.number().min(0).max(100) });
 export const RowSchema = z.object({
   invoiceNumber: CellSchema,
@@ -33,7 +33,7 @@ export const RowSchema = z.object({
 });
 
 const TextInputSchema = z.object({
-  text:     z.string().min(1).max(120_000),
+  text:     z.string().min(1).max(500_000),
   fileName: z.string().min(1).max(255),
 });
 
@@ -123,7 +123,7 @@ function parseGroqResponse(
   return { ok: true, row: validated.data };
 }
 
-// ── Retry wrapper ─────────────────────────────────────────────────────────────
+// ── Retry wrapper ─────────────────────────────────────────────────────────[...]
 async function runWithRetry(
   apiKey: string,
   body: unknown,
@@ -198,7 +198,7 @@ export const extractFromText = createServerFn({ method: "POST" })
         { role: "system", content: SYSTEM_PROMPT },
         {
           role: "user",
-          content: `Document filename: ${data.fileName}\n\n---\n${data.text.slice(0, 80_000)}${USER_SUFFIX}`,
+          content: `Document filename: ${data.fileName}\n\n---\n${data.text.slice(0, 128_000)}${USER_SUFFIX}`,
         },
       ],
       temperature:     0.0,
