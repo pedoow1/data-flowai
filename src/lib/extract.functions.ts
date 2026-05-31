@@ -13,6 +13,7 @@ const VISION_MODEL = "Phi-4-reasoning";         // Best vision model
 const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
 const MAX_TEXT_CHARS = 4_000_000;  // 4M chars ≈ 1M tokens (leave headroom)
+const MAX_TOKENS = 128000;  // Full context window for both models
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
   const isAdminEmail =
@@ -79,7 +80,6 @@ async function callGitHubModels(
   token: string,
   model: string,
   messages: any[],
-  maxTokens: number = 2048,
 ): Promise<{ status: number; bodyText: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -96,7 +96,7 @@ async function callGitHubModels(
         model,
         messages,
         temperature: 0.0,  // Deterministic output (no top_p with temperature 0)
-        max_tokens: maxTokens,
+        max_tokens: MAX_TOKENS,  // 128,000 tokens full context
       }),
     });
     return { status: res.status, bodyText: await res.text() };
@@ -144,13 +144,12 @@ async function runWithRetry(
   token: string,
   model: string,
   messages: any[],
-  maxTokens: number,
 ): Promise<{ ok: true; row: z.infer<typeof RowSchema> } | { ok: false; error: string }> {
   let lastError = "Unknown error";
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const { status, bodyText } = await callGitHubModels(token, model, messages, maxTokens);
+      const { status, bodyText } = await callGitHubModels(token, model, messages);
 
       if (status === 200) {
         const result = parseGitHubResponse(status, bodyText, model);
@@ -193,6 +192,15 @@ async function runWithRetry(
   return { ok: false, error: `${lastError} Please try again.` };
 }
 
+// ── Chunking helper for text that exceeds request limits ─────────────────────
+function chunkText(text: string, chunkSize: number): string[] {
+  const chunks: string[] = [];
+  for (let i = 0; i < text.length; i += chunkSize) {
+    chunks.push(text.slice(i, i + chunkSize));
+  }
+  return chunks.length > 0 ? chunks : [""];
+}
+
 // ── Server function: text extraction (Mistral-medium-2505 - 128K context) ─────
 // Can read entire 500+ page documents in a single request!
 export const extractFromText = createServerFn({ method: "POST" })
@@ -210,8 +218,9 @@ export const extractFromText = createServerFn({ method: "POST" })
     }
 
     // Mistral-medium-2505: 128K tokens context = ~500,000 words
-    // No need for chunking! Just send the whole thing.
-    const processingText = data.text.slice(0, MAX_TEXT_CHARS);
+    // Use first chunk if text exceeds safe limits (GitHub has request size limits)
+    const chunks = chunkText(data.text, MAX_TEXT_CHARS);
+    const processingText = chunks[0];
 
     const messages = [
       {
@@ -220,7 +229,7 @@ export const extractFromText = createServerFn({ method: "POST" })
       },
     ];
 
-    return runWithRetry(token, TEXT_MODEL, messages, 2048);
+    return runWithRetry(token, TEXT_MODEL, messages);
   });
 
 // ── Server function: vision extraction (Phi-4-reasoning - advanced vision) ────
@@ -253,5 +262,5 @@ export const extractFromImage = createServerFn({ method: "POST" })
       },
     ];
 
-    return runWithRetry(token, VISION_MODEL, messages, 2048);
+    return runWithRetry(token, VISION_MODEL, messages);
   });
