@@ -20,6 +20,17 @@ const MAX_COMPLETION_TOKENS = 16384;           // Model's actual limit
 const SAFE_REQUEST_SIZE = 50_000;  // ~12.5K tokens input (conservative)
 const CHUNK_OVERLAP = 2_000;  // Character overlap between chunks for context continuity
 
+// ── Error handling helper ────────────────────────────────────────────────────
+function extractErrorMessage(error: any): string {
+  if (!error) return "Unknown error occurred";
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message;
+  if (error?.message && typeof error.message === "string") return error.message;
+  if (error?.error && typeof error.error === "string") return error.error;
+  if (error?.toString && typeof error.toString === "function") return error.toString();
+  return JSON.stringify(error).slice(0, 200);
+}
+
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
   const isAdminEmail =
     typeof context.claims?.email === "string" &&
@@ -122,10 +133,14 @@ function parseGitHubResponse(
 
   let json: any;
   try { json = JSON.parse(bodyText); }
-  catch { return { ok: false, error: "GitHub Models returned invalid JSON." }; }
+  catch { 
+    console.error(`[extract/${model}] JSON.parse failed on response`);
+    return { ok: false, error: "GitHub Models returned invalid JSON." }; 
+  }
 
   const content: string = json?.choices?.[0]?.message?.content ?? "";
   if (!content) {
+    console.error(`[extract/${model}] Empty content from model`);
     return { ok: false, error: "GitHub Models returned empty response." };
   }
 
@@ -133,14 +148,20 @@ function parseGitHubResponse(
 
   let parsed: unknown;
   try { parsed = JSON.parse(cleaned); }
-  catch {
-    console.error(`[extract/${model}] unparseable content:`, content.slice(0, 300));
+  catch (e) {
+    console.error(`[extract/${model}] Failed to parse cleaned JSON:`, {
+      cleanedSlice: cleaned.slice(0, 300),
+      error: extractErrorMessage(e),
+    });
     return { ok: false, error: "AI returned an unparseable response. Please retry." };
   }
 
   const validated = RowSchema.safeParse(parsed);
   if (!validated.success) {
-    console.error(`[extract/${model}] schema mismatch:`, JSON.stringify(validated.error.issues).slice(0, 300));
+    console.error(`[extract/${model}] Schema validation failed:`, {
+      issues: validated.error.issues.slice(0, 3),
+      receivedKeys: Object.keys(parsed ?? {}),
+    });
     return { ok: false, error: "AI response missing required fields. Please retry." };
   }
   return { ok: true, row: validated.data };
@@ -206,7 +227,7 @@ async function runWithRetry(
         return result ?? { ok: false, error: "Failed to parse response." };
       }
 
-      console.error(`[extract/${model}] GitHub ${status}:`, bodyText.slice(0, 400));
+      console.error(`[extract/${model}] Attempt ${attempt}/3 - GitHub ${status}:`, bodyText.slice(0, 400));
 
       if (status === 503 || status === 502 || status === 524) {
         lastError = "GitHub Models is temporarily unavailable.";
@@ -233,7 +254,10 @@ async function runWithRetry(
     } catch (e: any) {
       const isAbort = e?.name === "AbortError";
       lastError = isAbort ? "Extraction timed out." : (e?.message ?? "Network error");
-      console.error(`[extract/${model}] fetch failed:`, lastError);
+      console.error(`[extract/${model}] Attempt ${attempt}/3 fetch failed:`, {
+        name: e?.name,
+        message: extractErrorMessage(e),
+      });
       if (isAbort) break;
       await new Promise((r) => setTimeout(r, 2_000));
     }
@@ -370,20 +394,31 @@ export const extractFromText = createServerFn({ method: "POST" })
     if (quotaError) return { ok: false as const, error: quotaError };
 
     const token = (process.env.GITHUB_TOKEN || "").trim();
-    if (!token) return { ok: false as const, error: "Server misconfigured (missing GITHUB_TOKEN)." };
+    if (!token) {
+      console.error("[extract] GITHUB_TOKEN not configured");
+      return { ok: false as const, error: "Server misconfigured (missing GITHUB_TOKEN)." };
+    }
 
     if (data.text.length < 20) {
+      console.log("[extract] Text too short, needs vision");
       return { ok: false as const, error: "__NEEDS_VISION__" };
     }
 
     try {
+      console.log(`[extract] Starting text extraction for: ${data.fileName} (${data.text.length} chars)`);
       // Automatic chunking + merge for any text larger than safe request size
       return await processTextInChunks(token, TEXT_MODEL, data.text, data.fileName);
     } catch (error: any) {
-      console.error("[extract] Unexpected error during text extraction:", error);
+      const errorMsg = extractErrorMessage(error);
+      console.error("[extract] Unexpected error during text extraction:", {
+        fileName: data.fileName,
+        textLength: data.text.length,
+        errorMsg,
+        stack: error?.stack,
+      });
       return { 
         ok: false as const, 
-        error: error?.message || "An unexpected error occurred during extraction. Please try again." 
+        error: `Failed to extract text: ${errorMsg}` 
       };
     }
   });
@@ -398,9 +433,13 @@ export const extractFromImage = createServerFn({ method: "POST" })
     if (quotaError) return { ok: false as const, error: quotaError };
 
     const token = (process.env.GITHUB_TOKEN || "").trim();
-    if (!token) return { ok: false as const, error: "Server misconfigured (missing GITHUB_TOKEN)." };
+    if (!token) {
+      console.error("[extract] GITHUB_TOKEN not configured");
+      return { ok: false as const, error: "Server misconfigured (missing GITHUB_TOKEN)." };
+    }
 
     try {
+      console.log(`[extract] Starting vision extraction for: ${data.fileName} (${data.imageDataUrl.length} chars in data URL)`);
       const messages = [
         {
           role: "user",
@@ -421,10 +460,16 @@ export const extractFromImage = createServerFn({ method: "POST" })
 
       return await runWithRetry(token, VISION_MODEL, messages);
     } catch (error: any) {
-      console.error("[extract] Unexpected error during image extraction:", error);
+      const errorMsg = extractErrorMessage(error);
+      console.error("[extract] Unexpected error during image extraction:", {
+        fileName: data.fileName,
+        dataUrlLength: data.imageDataUrl.length,
+        errorMsg,
+        stack: error?.stack,
+      });
       return { 
         ok: false as const, 
-        error: error?.message || "An unexpected error occurred during extraction. Please try again." 
+        error: `Failed to extract image: ${errorMsg}` 
       };
     }
   });
