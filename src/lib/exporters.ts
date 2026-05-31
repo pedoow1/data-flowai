@@ -33,12 +33,14 @@ const flatten = (rows: ExtractedRow[]) => rows.map(r => ({
 export function exportJSON(rows: ExtractedRow[]) {
   download(autoName(rows, "json"), new Blob([JSON.stringify(flatten(rows), null, 2)], { type: "application/json" }));
 }
+
 export function exportCSV(rows: ExtractedRow[]) {
   const data = flatten(rows);
   const headers = Object.keys(data[0]);
-  const csv = [headers.join(","), ...data.map(r => headers.map(h => `"${String(r[h as keyof typeof r]).replace(/"/g, '""')}"`).join(","))].join("\n");
+  const csv = [headers.join(","), ...data.map(r => headers.map(h => `"${String(r[h as keyof typeof r]).replace(/"/g, '\"\"')}"`).join(","))].join("\n");
   download(autoName(rows, "csv"), new Blob([csv], { type: "text/csv" }));
 }
+
 export async function exportXLSX(rows: ExtractedRow[]) {
   const XLSX = await import("xlsx");
   const data = flatten(rows);
@@ -47,4 +49,33 @@ export async function exportXLSX(rows: ExtractedRow[]) {
   XLSX.utils.book_append_sheet(wb, ws, "DataFlow");
   const out = XLSX.write(wb, { bookType: "xlsx", type: "array" }) as ArrayBuffer;
   download(autoName(rows, "xlsx"), new Blob([out], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+}
+
+// ── Export format restrictions by plan ──────────────────────────────────────
+export type ExportFormat = "json" | "csv" | "xlsx";
+
+export function getAvailableExportFormats(plan: "free" | "pro" | "team"): ExportFormat[] {
+  switch (plan) {
+    case "free":
+      return ["xlsx"]; // Free: Excel only
+    case "pro":
+      return ["csv", "xlsx"]; // Pro: CSV + Excel
+    case "team":
+      return ["json", "csv", "xlsx"]; // Team: All formats
+  }
+}
+
+export function isExportFormatAllowed(plan: "free" | "pro" | "team", format: ExportFormat): boolean {
+  return getAvailableExportFormats(plan).includes(format);
+}
+
+export function getExportFormatLabel(format: ExportFormat): string {
+  switch (format) {
+    case "json":
+      return "JSON";
+    case "csv":
+      return "CSV";
+    case "xlsx":
+      return "Excel";
+  }
 }
