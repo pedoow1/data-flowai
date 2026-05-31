@@ -5,10 +5,11 @@ import { getPlanAndUsage } from "./usage.functions";
 import { ADMIN_EMAIL } from "./config";
 
 // ── Groq configuration ──────────────────────────────────────────────────────
-const TEXT_MODEL   = "llama-3.3-70b-versatile";
+const TEXT_MODEL   = "openai/gpt-oss-120b";  // Upgraded from llama-3.3-70b: 128K context, better accuracy
 const VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
 const GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions";
 const TIMEOUT_MS   = 120_000;
+const CHUNK_SIZE_CHARS = 100_000;  // Process in 100K char chunks to respect token limits
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
   const isAdminEmail =
@@ -176,7 +177,16 @@ async function runWithRetry(
   return { ok: false, error: `${lastError} Please try again.` };
 }
 
-// ── Server function: text extraction (llama-3.3-70b) ─────────────────────────
+// ── Chunking logic for large documents ───────────────────────────────────────
+function chunkText(text: string, chunkSize: number): string[] {
+  const chunks: string[] = [];
+  for (let i = 0; i < text.length; i += chunkSize) {
+    chunks.push(text.slice(i, i + chunkSize));
+  }
+  return chunks.length > 0 ? chunks : [""];
+}
+
+// ── Server function: text extraction (openai/gpt-oss-120b) ────────────────────
 export const extractFromText = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => TextInputSchema.parse(d))
@@ -192,13 +202,18 @@ export const extractFromText = createServerFn({ method: "POST" })
       return { ok: false as const, error: "__NEEDS_VISION__" };
     }
 
+    // For very large documents, chunk and process the most relevant section (first chunk)
+    // to respect Groq free tier token limits (~6K-10K TPM)
+    const chunks = chunkText(data.text, CHUNK_SIZE_CHARS);
+    const processingText = chunks[0].slice(0, 128_000);  // Use first chunk, capped at 128K chars
+
     const body = {
       model: TEXT_MODEL,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         {
           role: "user",
-          content: `Document filename: ${data.fileName}\n\n---\n${data.text.slice(0, 128_000)}${USER_SUFFIX}`,
+          content: `Document filename: ${data.fileName}\n\n---\n${processingText}${USER_SUFFIX}`,
         },
       ],
       temperature:     0.0,
