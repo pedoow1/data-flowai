@@ -6,10 +6,10 @@ import { ADMIN_EMAIL } from "./config";
 
 // ── API configuration ────────────────────────────────────────────────────────
 // GitHub Models API (Free tier from GitHub)
-// Text extraction: Mistral Medium 2505 (128K context - reads 500+ page documents)
-// Vision extraction: Phi-4 Reasoning (advanced vision understanding + reasoning)
-const TEXT_MODEL = "mistral-ai/mistral-medium-2505";      // 128K tokens context
-const VISION_MODEL = "microsoft/Phi-4-reasoning";          // Best vision model
+// Text extraction: Mistral-medium-2505 (128K context - reads 500+ page documents)
+// Vision extraction: Phi-4-reasoning (advanced vision understanding + reasoning)
+const TEXT_MODEL = "Mistral-medium-2505";      // 128K tokens context
+const VISION_MODEL = "Phi-4-reasoning";         // Best vision model
 const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
 const MAX_TEXT_CHARS = 4_000_000;  // 4M chars ≈ 1M tokens (leave headroom)
@@ -194,7 +194,7 @@ async function runWithRetry(
   return { ok: false, error: `${lastError} Please try again.` };
 }
 
-// ── Server function: text extraction (Mistral Medium 2505 - 128K context) ─────
+// ── Server function: text extraction (Mistral-medium-2505 - 128K context) ─────
 // Can read entire 500+ page documents in a single request!
 export const extractFromText = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -210,7 +210,7 @@ export const extractFromText = createServerFn({ method: "POST" })
       return { ok: false as const, error: "__NEEDS_VISION__" };
     }
 
-    // Mistral Medium 2505: 128K tokens context = ~500,000 words
+    // Mistral-medium-2505: 128K tokens context = ~500,000 words
     // No need for chunking! Just send the whole thing.
     const processingText = data.text.slice(0, MAX_TEXT_CHARS);
 
@@ -224,7 +224,7 @@ export const extractFromText = createServerFn({ method: "POST" })
     return runWithRetry(token, TEXT_MODEL, messages, 2048);
   });
 
-// ── Server function: vision extraction (Phi-4 Reasoning - advanced vision) ────
+// ── Server function: vision extraction (Phi-4-reasoning - advanced vision) ────
 // Best for complex document images with high extraction accuracy + reasoning
 export const extractFromImage = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
