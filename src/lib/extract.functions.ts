@@ -7,13 +7,13 @@ import { ADMIN_EMAIL } from "./config";
 // ── API configuration ────────────────────────────────────────────────────────
 // GitHub Models API (Free tier from GitHub)
 // Text extraction: Mistral-medium-2505 (128K context - reads 500+ page documents)
-// Vision extraction: Phi-4-reasoning (advanced vision understanding + reasoning)
+// Vision extraction: Phi-4-reasoning (128K context - advanced vision understanding + reasoning)
 const TEXT_MODEL = "Mistral-medium-2505";      // 128K tokens context
-const VISION_MODEL = "Phi-4-reasoning";         // Best vision model
+const VISION_MODEL = "Phi-4-reasoning";         // 128K tokens context - best vision model
 const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
 const MAX_TEXT_CHARS = 4_000_000;  // 4M chars ≈ 1M tokens (leave headroom)
-const MAX_TOKENS = 8000;  // GitHub Models API limit for mistral-medium-2505
+const MAX_TOKENS = 128000;  // Full context window for both models (Mistral + Phi-4-reasoning)
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
   const isAdminEmail =
@@ -96,7 +96,7 @@ async function callGitHubModels(
         model,
         messages,
         temperature: 0.0,  // Deterministic output (no top_p with temperature 0)
-        max_tokens: MAX_TOKENS,  // 8,000 tokens GitHub Models API limit
+        max_tokens: MAX_TOKENS,  // 128,000 tokens full context for both models
       }),
     });
     return { status: res.status, bodyText: await res.text() };
@@ -201,8 +201,8 @@ function chunkText(text: string, chunkSize: number): string[] {
   return chunks.length > 0 ? chunks : [""];
 }
 
-// ── Server function: text extraction (Mistral-medium-2505 - 8K max request) ─────
-// GitHub Models API enforces 8,000 token limit for request body
+// ── Server function: text extraction (Mistral-medium-2505 - 128K context) ─────
+// Can read entire 500+ page documents in a single request!
 export const extractFromText = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => TextInputSchema.parse(d))
@@ -217,10 +217,9 @@ export const extractFromText = createServerFn({ method: "POST" })
       return { ok: false as const, error: "__NEEDS_VISION__" };
     }
 
-    // GitHub Models API: 8K token limit for request body
-    // Estimate ~4 chars per token, so max ~32,000 chars per request
-    const MAX_REQUEST_CHARS = 32000;
-    const chunks = chunkText(data.text, MAX_REQUEST_CHARS);
+    // Mistral-medium-2505: 128K tokens context = ~500,000 words
+    // Use first chunk if text exceeds safe limits (GitHub has request size limits)
+    const chunks = chunkText(data.text, MAX_TEXT_CHARS);
     const processingText = chunks[0];
 
     const messages = [
@@ -233,7 +232,7 @@ export const extractFromText = createServerFn({ method: "POST" })
     return runWithRetry(token, TEXT_MODEL, messages);
   });
 
-// ── Server function: vision extraction (Phi-4-reasoning - advanced vision) ────
+// ── Server function: vision extraction (Phi-4-reasoning - 128K context) ────
 // Best for complex document images with high extraction accuracy + reasoning
 export const extractFromImage = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
