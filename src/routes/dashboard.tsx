@@ -80,6 +80,15 @@ function Dashboard() {
   const runExtraction = async (file: File) => {
     if (!email) return;
 
+    // ✅ Check file size early
+    const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+    if (file.size > MAX_FILE_SIZE) {
+      toast.error("File too large", {
+        description: `Maximum file size is 50MB. Your file is ${(file.size / 1024 / 1024).toFixed(1)}MB.`
+      });
+      return;
+    }
+
     if (!usage.unlimited && usage.remaining <= 0) {
       toast.error("Usage limit reached", {
         description: `You've used all ${usage.limit} uploads available on the ${usage.plan.toUpperCase()} plan.`,
@@ -103,19 +112,44 @@ function Dashboard() {
 
       if (isImage) {
         // ── Image file → vision model directly ──
-        toast.info("Using vision model for image…");
-        const imageDataUrl = await imageFileToDataUrl(file);
-        res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
+        toast.info("Processing image…");
+        try {
+          const imageDataUrl = await imageFileToDataUrl(file);
+          // ✅ Check if data URL is too large
+          if (imageDataUrl.length > 20_000_000) {
+            throw new Error("Image too large to process. Please use a smaller image.");
+          }
+          res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
+        } catch (e) {
+          throw new Error(e instanceof Error ? e.message : "Failed to process image");
+        }
       } else {
         // ── PDF → try text first, fall back to vision if scanned ──
-        const extracted = await extractPdfText(file);
-        pages = extracted.pages;
-        res = (await extract({ data: { text: extracted.text, fileName: file.name } })) as AIResult;
+        toast.info("Extracting text from PDF…");
+        let extracted: { text: string; pages: number };
+        try {
+          extracted = await extractPdfText(file);
+        } catch (e) {
+          throw new Error("Failed to extract PDF text. Try a simpler PDF or use the image mode.");
+        }
 
-        if (!res.ok && res.error === "__NEEDS_VISION__") {
+        pages = extracted.pages;
+
+        // ✅ Check if extracted text is reasonable
+        if (extracted.text.length < 20) {
           toast.info("Scanned PDF detected — switching to vision model…");
           const imageDataUrl = await pdfPageToImageDataUrl(file, 1);
           res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
+        } else if (extracted.text.length > 6_000_000) {
+          throw new Error("PDF text is too large (>6MB). Please try a smaller document.");
+        } else {
+          res = (await extract({ data: { text: extracted.text, fileName: file.name } })) as AIResult;
+
+          if (!res.ok && res.error === "__NEEDS_VISION__") {
+            toast.info("Scanned PDF detected — switching to vision model…");
+            const imageDataUrl = await pdfPageToImageDataUrl(file, 1);
+            res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
+          }
         }
       }
 
@@ -309,7 +343,7 @@ function Sidebar({ usage, onUpgrade, tab, setTab, isAdmin }: {
           <button
             key={it.id}
             onClick={() => setTab(it.id)}
-            className={`w-full text-left flex items-center gap-2.5 px-3 py-2 rounded-lg transition ${tab === it.id ? "bg-white/[0.06] text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-white/[0.02]"}`}
+            className={`w-full text-left flex items-center gap-2.5 px-3 py-2 rounded-lg transition ${tab === it.id ? "bg-white/[0.06] text-foreground" : "text-muted-foreground hover:text-foreground"}`}
           >
             {it.i} {it.t}
           </button>
