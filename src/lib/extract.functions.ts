@@ -95,9 +95,8 @@ async function callGitHubModels(
       body: JSON.stringify({
         model,
         messages,
-        temperature: 0.0,
+        temperature: 0.0,  // Deterministic output (no top_p with temperature 0)
         max_tokens: maxTokens,
-        top_p: 0.9,
       }),
     });
     return { status: res.status, bodyText: await res.text() };
