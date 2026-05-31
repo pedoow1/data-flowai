@@ -6,15 +6,14 @@ import { ADMIN_EMAIL } from "./config";
 
 // ── API configuration ────────────────────────────────────────────────────────
 // GitHub Models API (Free tier from GitHub)
-// Text extraction: Mistral-medium-2505 (8K max request - GitHub enforced limit)
+// Text extraction: Mistral-medium-2505 (128K context - reads 500+ page documents)
 // Vision extraction: Phi-4-reasoning (128K context - advanced vision understanding + reasoning)
-const TEXT_MODEL = "Mistral-medium-2505";       // 8K tokens max request size
-const VISION_MODEL = "Phi-4-reasoning";         // 128K tokens context
-const TEXT_MODEL_MAX_TOKENS = 8000;             // Mistral-medium-2505 request limit
-const VISION_MODEL_MAX_TOKENS = 128000;         // Phi-4-reasoning full context
+const TEXT_MODEL = "Mistral-medium-2505";      // 128K tokens context
+const VISION_MODEL = "Phi-4-reasoning";         // 128K tokens context - best vision model
 const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
-const MAX_TEXT_CHARS = 32000;  // ~8K tokens for Mistral request body
+const MAX_TEXT_CHARS = 4_000_000;  // 4M chars ≈ 1M tokens (leave headroom)
+const MAX_TOKENS = 128000;  // Full context window for both models (Mistral + Phi-4-reasoning)
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
   const isAdminEmail =
@@ -85,9 +84,6 @@ async function callGitHubModels(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   
-  // Determine max_tokens based on model
-  const maxTokens = model === TEXT_MODEL ? TEXT_MODEL_MAX_TOKENS : VISION_MODEL_MAX_TOKENS;
-  
   try {
     const res = await fetch(`${GITHUB_MODELS_API}/chat/completions`, {
       method: "POST",
@@ -100,7 +96,7 @@ async function callGitHubModels(
         model,
         messages,
         temperature: 0.0,  // Deterministic output (no top_p with temperature 0)
-        max_tokens: maxTokens,  // 8K for Mistral, 128K for Phi-4-reasoning
+        max_tokens: MAX_TOKENS,  // 128,000 tokens full context for both models
       }),
     });
     return { status: res.status, bodyText: await res.text() };
@@ -205,8 +201,8 @@ function chunkText(text: string, chunkSize: number): string[] {
   return chunks.length > 0 ? chunks : [""];
 }
 
-// ── Server function: text extraction (Mistral-medium-2505 - 8K max request) ─────
-// GitHub Models API enforces 8K token limit for request body
+// ── Server function: text extraction (Mistral-medium-2505 - 128K context) ─────
+// Can read entire 500+ page documents in a single request!
 export const extractFromText = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => TextInputSchema.parse(d))
@@ -221,7 +217,8 @@ export const extractFromText = createServerFn({ method: "POST" })
       return { ok: false as const, error: "__NEEDS_VISION__" };
     }
 
-    // GitHub Models API: 8K token limit for Mistral request body (~32K chars)
+    // Mistral-medium-2505: 128K tokens context = ~500,000 words
+    // Use first chunk if text exceeds safe limits (GitHub has request size limits)
     const chunks = chunkText(data.text, MAX_TEXT_CHARS);
     const processingText = chunks[0];
 
