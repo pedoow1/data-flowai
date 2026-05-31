@@ -24,6 +24,9 @@ type UsageSummary = {
   label: string;
   periodStart: string | null;
   periodEnd: string | null;
+  dailyUsed?: number;
+  dailyLimit?: number;
+  dailyRemaining?: number;
 };
 
 function isSchemaCacheError(error: { message?: string } | null | undefined) {
