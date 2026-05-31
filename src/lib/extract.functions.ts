@@ -6,15 +6,17 @@ import { ADMIN_EMAIL } from "./config";
 
 // ── API configuration ────────────────────────────────────────────────────────
 // GitHub Models API (Free tier from GitHub)
-// Text extraction: gpt-4o-mini (Mistral) - 128K context for text processing
+// Text extraction: gpt-4o-mini (128K context for text processing)
 // Vision extraction: gpt-4o (128K context - advanced vision understanding + reasoning)
-const TEXT_MODEL = "gpt-4o-mini";              // 128K tokens context (Mistral-based)
+const TEXT_MODEL = "gpt-4o-mini";              // 128K tokens context
 const VISION_MODEL = "gpt-4o";                 // 128K tokens context - best vision model
 const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
-const MAX_TEXT_CHARS = 3_500_000;  // Safe chunk size (~900K tokens per request)
-const MAX_TOKENS = 128000;  // Full context window for both models
-const CHUNK_OVERLAP = 2000;  // Character overlap between chunks for context continuity
+
+// Safe limits to avoid hitting token limits
+// Each request should stay well under the model's token limit
+const SAFE_REQUEST_SIZE = 50_000;  // ~12.5K tokens (conservative estimate: 1 token ≈ 4 chars)
+const CHUNK_OVERLAP = 2_000;  // Character overlap between chunks for context continuity
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
   const isAdminEmail =
@@ -97,7 +99,7 @@ async function callGitHubModels(
         model,
         messages,
         temperature: 0.0,  // Deterministic output (no top_p with temperature 0)
-        max_tokens: MAX_TOKENS,  // 128,000 tokens full context for both models
+        max_tokens: 128000,  // Let model use full context
       }),
     });
     return { status: res.status, bodyText: await res.text() };
@@ -237,33 +239,35 @@ async function runWithRetry(
 }
 
 // ── Chunking helper with overlap for context continuity ───────────────────────
-function chunkTextWithOverlap(text: string, chunkSize: number, overlap: number): Array<{ text: string; isFirstChunk: boolean; isLastChunk: boolean }> {
-  const chunks: Array<{ text: string; isFirstChunk: boolean; isLastChunk: boolean }> = [];
+function chunkTextWithOverlap(text: string, chunkSize: number, overlap: number): Array<{ text: string; chunkNum: number; totalChunks: number }> {
+  const chunks: Array<{ text: string; chunkNum: number; totalChunks: number }> = [];
   
   if (text.length <= chunkSize) {
-    return [{ text, isFirstChunk: true, isLastChunk: true }];
+    return [{ text, chunkNum: 1, totalChunks: 1 }];
   }
 
   let pos = 0;
+  let chunkCount = 0;
+  
+  // Calculate total chunks first
+  const totalChunks = Math.ceil((text.length - overlap) / (chunkSize - overlap));
+
   while (pos < text.length) {
     const end = Math.min(pos + chunkSize, text.length);
     const chunkText = text.slice(pos, end);
-    const isFirstChunk = pos === 0;
-    const isLastChunk = end === text.length;
+    chunkCount++;
 
     chunks.push({
       text: chunkText,
-      isFirstChunk,
-      isLastChunk,
+      chunkNum: chunkCount,
+      totalChunks,
     });
 
-    // Move position forward, accounting for overlap on subsequent chunks
+    // Move position forward with overlap for next iteration
     pos = end - overlap;
 
-    // Ensure we're making forward progress
-    if (pos <= chunks[chunks.length - 1].text.length) {
-      pos = end;
-    }
+    // Ensure we don't get stuck at the end
+    if (pos >= text.length) break;
   }
 
   return chunks;
@@ -275,9 +279,8 @@ async function processTextInChunks(
   model: string,
   fullText: string,
   fileName: string,
-  chunkSize: number = MAX_TEXT_CHARS,
 ): Promise<{ ok: true; row: z.infer<typeof RowSchema> } | { ok: false; error: string }> {
-  const chunks = chunkTextWithOverlap(fullText, chunkSize, CHUNK_OVERLAP);
+  const chunks = chunkTextWithOverlap(fullText, SAFE_REQUEST_SIZE, CHUNK_OVERLAP);
 
   if (chunks.length === 1) {
     // Single chunk - process normally
@@ -295,22 +298,17 @@ async function processTextInChunks(
   let consecutiveFailures = 0;
   const maxFailures = 2;
 
-  console.log(`[extract] Processing ${chunks.length} chunks for document: ${fileName}`);
+  console.log(`[extract] Processing ${chunks.length} chunks for document: ${fileName} (${fullText.length} chars)`);
 
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i];
-    const chunkNum = i + 1;
-    const chunkContext = `[Chunk ${chunkNum}/${chunks.length}]`;
-
+  for (const chunk of chunks) {
     const chunkPrompt = `
 ${SYSTEM_PROMPT}
 
 Document filename: ${fileName}
-${chunkContext}
+[Chunk ${chunk.chunkNum}/${chunk.totalChunks}]
 
-${chunk.isFirstChunk ? "This is the BEGINNING of the document." : ""}
-${chunk.isLastChunk ? "This is the END of the document." : ""}
-${!chunk.isFirstChunk && !chunk.isLastChunk ? `This is the MIDDLE section. Look carefully for all relevant fields.` : ""}
+${chunk.chunkNum === 1 ? "This is the BEGINNING of the document." : ""}
+${chunk.chunkNum === chunk.totalChunks ? "This is the END of the document." : ""}
 
 ---
 ${chunk.text}
@@ -327,11 +325,11 @@ ${USER_SUFFIX}
     const chunkResult = await runWithRetry(token, model, messages);
 
     if (!chunkResult.ok) {
-      console.warn(`[extract] Chunk ${chunkNum}/${chunks.length} failed:`, chunkResult.error);
+      console.warn(`[extract] Chunk ${chunk.chunkNum}/${chunk.totalChunks} failed:`, chunkResult.error);
       consecutiveFailures++;
 
       if (consecutiveFailures >= maxFailures) {
-        return { ok: false, error: `Processing failed on chunk ${chunkNum}. ${chunkResult.error}` };
+        return { ok: false, error: `Processing failed on chunk ${chunk.chunkNum}. ${chunkResult.error}` };
       }
 
       // Continue with next chunk
@@ -341,11 +339,11 @@ ${USER_SUFFIX}
     consecutiveFailures = 0; // Reset on success
     results.push(chunkResult as { ok: true; row: z.infer<typeof RowSchema> });
     
-    console.log(`[extract] Chunk ${chunkNum}/${chunks.length} completed successfully`);
+    console.log(`[extract] Chunk ${chunk.chunkNum}/${chunk.totalChunks} completed successfully`);
 
     // Add small delay between chunks to respect rate limits
-    if (i < chunks.length - 1) {
-      await new Promise((r) => setTimeout(r, 1000));
+    if (chunk.chunkNum < chunk.totalChunks) {
+      await new Promise((r) => setTimeout(r, 800));
     }
   }
 
@@ -355,13 +353,13 @@ ${USER_SUFFIX}
 
   // Merge all successful chunk results
   const mergedRow = mergeChunkResults(results);
-  console.log(`[extract] Merged ${results.length} chunk results for ${fileName}`);
+  console.log(`[extract] Merged ${results.length}/${chunks.length} chunk results for ${fileName}`);
 
   return { ok: true, row: mergedRow };
 }
 
 // ── Server function: text extraction (gpt-4o-mini - 128K context) ─────
-// Can read entire 500+ page documents with chunking + merge strategy!
+// Automatically chunks large documents and merges results for safety
 export const extractFromText = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => TextInputSchema.parse(d))
@@ -376,8 +374,8 @@ export const extractFromText = createServerFn({ method: "POST" })
       return { ok: false as const, error: "__NEEDS_VISION__" };
     }
 
-    // Use chunking + merge for safe processing of large documents
-    return processTextInChunks(token, TEXT_MODEL, data.text, data.fileName, MAX_TEXT_CHARS);
+    // Automatic chunking + merge for any text larger than safe request size
+    return processTextInChunks(token, TEXT_MODEL, data.text, data.fileName);
   });
 
 // ── Server function: vision extraction (gpt-4o - 128K context) ────
