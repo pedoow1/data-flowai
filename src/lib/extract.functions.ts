@@ -6,14 +6,15 @@ import { ADMIN_EMAIL } from "./config";
 
 // ── API configuration ────────────────────────────────────────────────────────
 // GitHub Models API (Free tier from GitHub)
-// Text extraction: Mistral-medium-2505 (128K context - reads 500+ page documents)
-// Vision extraction: Phi-4-reasoning (128K context - advanced vision understanding + reasoning)
-const TEXT_MODEL = "Mistral-medium-2505";      // 128K tokens context
-const VISION_MODEL = "Phi-4-reasoning";         // 128K tokens context - best vision model
+// Text extraction: gpt-4o-mini (Mistral) - 128K context for text processing
+// Vision extraction: gpt-4o (128K context - advanced vision understanding + reasoning)
+const TEXT_MODEL = "gpt-4o-mini";              // 128K tokens context (Mistral-based)
+const VISION_MODEL = "gpt-4o";                 // 128K tokens context - best vision model
 const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
-const MAX_TEXT_CHARS = 4_000_000;  // 4M chars ≈ 1M tokens (leave headroom)
-const MAX_TOKENS = 128000;  // Full context window for both models (Mistral + Phi-4-reasoning)
+const MAX_TEXT_CHARS = 3_500_000;  // Safe chunk size (~900K tokens per request)
+const MAX_TOKENS = 128000;  // Full context window for both models
+const CHUNK_OVERLAP = 2000;  // Character overlap between chunks for context continuity
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
   const isAdminEmail =
@@ -38,7 +39,7 @@ export const RowSchema = z.object({
 });
 
 const TextInputSchema = z.object({
-  text:     z.string().min(1).max(5_000_000),
+  text:     z.string().min(1).max(6_000_000),
   fileName: z.string().min(1).max(255),
 });
 
@@ -139,6 +140,49 @@ function parseGitHubResponse(
   return { ok: true, row: validated.data };
 }
 
+// ── Merge results from multiple chunk extractions ─────────────────────────────
+function mergeChunkResults(results: Array<{ ok: true; row: z.infer<typeof RowSchema> }>): z.infer<typeof RowSchema> {
+  if (results.length === 0) {
+    return {
+      invoiceNumber: { v: "—", c: 0 },
+      client: { v: "—", c: 0 },
+      date: { v: "—", c: 0 },
+      amount: { v: "—", c: 0 },
+      tax: { v: "—", c: 0 },
+      total: { v: "—", c: 0 },
+    };
+  }
+
+  if (results.length === 1) {
+    return results[0].row;
+  }
+
+  // For multiple chunks, prefer higher confidence scores and non-empty values
+  const merge = (values: Array<{ v: string; c: number }>): { v: string; c: number } => {
+    // Filter out placeholder "—" values and empty strings
+    const meaningful = values.filter(x => x.v !== "—" && x.v.trim() !== "");
+    
+    if (meaningful.length === 0) {
+      return { v: "—", c: 0 };
+    }
+
+    // Sort by confidence score descending
+    meaningful.sort((a, b) => b.c - a.c);
+    
+    // Return the highest confidence result
+    return meaningful[0];
+  };
+
+  return {
+    invoiceNumber: merge(results.map(r => r.row.invoiceNumber)),
+    client: merge(results.map(r => r.row.client)),
+    date: merge(results.map(r => r.row.date)),
+    amount: merge(results.map(r => r.row.amount)),
+    tax: merge(results.map(r => r.row.tax)),
+    total: merge(results.map(r => r.row.total)),
+  };
+}
+
 // ── Retry wrapper for GitHub Models ──────────────────────────────────────────
 async function runWithRetry(
   token: string,
@@ -192,17 +236,132 @@ async function runWithRetry(
   return { ok: false, error: `${lastError} Please try again.` };
 }
 
-// ── Chunking helper for text that exceeds request limits ─────────────────────
-function chunkText(text: string, chunkSize: number): string[] {
-  const chunks: string[] = [];
-  for (let i = 0; i < text.length; i += chunkSize) {
-    chunks.push(text.slice(i, i + chunkSize));
+// ── Chunking helper with overlap for context continuity ───────────────────────
+function chunkTextWithOverlap(text: string, chunkSize: number, overlap: number): Array<{ text: string; isFirstChunk: boolean; isLastChunk: boolean }> {
+  const chunks: Array<{ text: string; isFirstChunk: boolean; isLastChunk: boolean }> = [];
+  
+  if (text.length <= chunkSize) {
+    return [{ text, isFirstChunk: true, isLastChunk: true }];
   }
-  return chunks.length > 0 ? chunks : [""];
+
+  let pos = 0;
+  while (pos < text.length) {
+    const end = Math.min(pos + chunkSize, text.length);
+    const chunkText = text.slice(pos, end);
+    const isFirstChunk = pos === 0;
+    const isLastChunk = end === text.length;
+
+    chunks.push({
+      text: chunkText,
+      isFirstChunk,
+      isLastChunk,
+    });
+
+    // Move position forward, accounting for overlap on subsequent chunks
+    pos = end - overlap;
+
+    // Ensure we're making forward progress
+    if (pos <= chunks[chunks.length - 1].text.length) {
+      pos = end;
+    }
+  }
+
+  return chunks;
 }
 
-// ── Server function: text extraction (Mistral-medium-2505 - 128K context) ─────
-// Can read entire 500+ page documents in a single request!
+// ── Process multiple chunks and merge results ────────────────────────────────
+async function processTextInChunks(
+  token: string,
+  model: string,
+  fullText: string,
+  fileName: string,
+  chunkSize: number = MAX_TEXT_CHARS,
+): Promise<{ ok: true; row: z.infer<typeof RowSchema> } | { ok: false; error: string }> {
+  const chunks = chunkTextWithOverlap(fullText, chunkSize, CHUNK_OVERLAP);
+
+  if (chunks.length === 1) {
+    // Single chunk - process normally
+    const messages = [
+      {
+        role: "user",
+        content: `${SYSTEM_PROMPT}\n\nDocument filename: ${fileName}\n\n---\n${chunks[0].text}${USER_SUFFIX}`,
+      },
+    ];
+    return runWithRetry(token, model, messages);
+  }
+
+  // Multiple chunks - process each with context about position
+  const results: Array<{ ok: true; row: z.infer<typeof RowSchema> }> = [];
+  let consecutiveFailures = 0;
+  const maxFailures = 2;
+
+  console.log(`[extract] Processing ${chunks.length} chunks for document: ${fileName}`);
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const chunkNum = i + 1;
+    const chunkContext = `[Chunk ${chunkNum}/${chunks.length}]`;
+
+    const chunkPrompt = `
+${SYSTEM_PROMPT}
+
+Document filename: ${fileName}
+${chunkContext}
+
+${chunk.isFirstChunk ? "This is the BEGINNING of the document." : ""}
+${chunk.isLastChunk ? "This is the END of the document." : ""}
+${!chunk.isFirstChunk && !chunk.isLastChunk ? `This is the MIDDLE section. Look carefully for all relevant fields.` : ""}
+
+---
+${chunk.text}
+${USER_SUFFIX}
+`;
+
+    const messages = [
+      {
+        role: "user",
+        content: chunkPrompt,
+      },
+    ];
+
+    const chunkResult = await runWithRetry(token, model, messages);
+
+    if (!chunkResult.ok) {
+      console.warn(`[extract] Chunk ${chunkNum}/${chunks.length} failed:`, chunkResult.error);
+      consecutiveFailures++;
+
+      if (consecutiveFailures >= maxFailures) {
+        return { ok: false, error: `Processing failed on chunk ${chunkNum}. ${chunkResult.error}` };
+      }
+
+      // Continue with next chunk
+      continue;
+    }
+
+    consecutiveFailures = 0; // Reset on success
+    results.push(chunkResult as { ok: true; row: z.infer<typeof RowSchema> });
+    
+    console.log(`[extract] Chunk ${chunkNum}/${chunks.length} completed successfully`);
+
+    // Add small delay between chunks to respect rate limits
+    if (i < chunks.length - 1) {
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+
+  if (results.length === 0) {
+    return { ok: false, error: "Failed to process any chunks of the document." };
+  }
+
+  // Merge all successful chunk results
+  const mergedRow = mergeChunkResults(results);
+  console.log(`[extract] Merged ${results.length} chunk results for ${fileName}`);
+
+  return { ok: true, row: mergedRow };
+}
+
+// ── Server function: text extraction (gpt-4o-mini - 128K context) ─────
+// Can read entire 500+ page documents with chunking + merge strategy!
 export const extractFromText = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => TextInputSchema.parse(d))
@@ -217,22 +376,11 @@ export const extractFromText = createServerFn({ method: "POST" })
       return { ok: false as const, error: "__NEEDS_VISION__" };
     }
 
-    // Mistral-medium-2505: 128K tokens context = ~500,000 words
-    // Use first chunk if text exceeds safe limits (GitHub has request size limits)
-    const chunks = chunkText(data.text, MAX_TEXT_CHARS);
-    const processingText = chunks[0];
-
-    const messages = [
-      {
-        role: "user",
-        content: `${SYSTEM_PROMPT}\n\nDocument filename: ${data.fileName}\n\n---\n${processingText}${USER_SUFFIX}`,
-      },
-    ];
-
-    return runWithRetry(token, TEXT_MODEL, messages);
+    // Use chunking + merge for safe processing of large documents
+    return processTextInChunks(token, TEXT_MODEL, data.text, data.fileName, MAX_TEXT_CHARS);
   });
 
-// ── Server function: vision extraction (Phi-4-reasoning - 128K context) ────
+// ── Server function: vision extraction (gpt-4o - 128K context) ────
 // Best for complex document images with high extraction accuracy + reasoning
 export const extractFromImage = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
