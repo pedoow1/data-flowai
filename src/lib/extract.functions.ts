@@ -12,7 +12,7 @@ const TEXT_MODEL = "gpt-4o-mini";      // Fast text extraction
 const VISION_MODEL = "gpt-4o";         // Best vision model
 const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
-const MAX_TOKENS = 1250;   // 1000-1500 tokens output (middle: 1250)
+const MAX_TOKENS = 8000;   // 8000 tokens max for output (GitHub Models limit)
 const CHUNK_SIZE = 12000;   // ~3000-4000 tokens per chunk (4 chars ≈ 1 token, so 12K chars ≈ 3K tokens)
 const CHUNK_DELAY_MS = 2000;  // 2 second delay between chunks to respect Vercel timeout
 
