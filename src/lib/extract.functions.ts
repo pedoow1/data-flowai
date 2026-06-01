@@ -14,8 +14,8 @@ const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
 const MAX_TOKENS = 8000;   // 8000 tokens max for output (GitHub Models limit)
 const CHUNK_SIZE = 8000;    // 8K chars per chunk for faster processing
-const PARALLEL_LIMIT = 3;  // Process max 3 chunks in parallel
-const BATCH_DELAY_MS = 500;  // 500ms delay between parallel batches
+const PARALLEL_LIMIT = 2;  // Process max 2 chunks in parallel
+const BATCH_DELAY_MS = 300;  // 300ms delay between parallel batches
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
   const isAdminEmail =
