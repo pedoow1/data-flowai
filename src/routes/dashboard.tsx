@@ -58,6 +58,43 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+// ── Client-side error extraction ────────────────────────────────────────────
+function extractClientError(error: any): string {
+  if (!error) return "Unknown error occurred";
+  
+  // Handle Error objects
+  if (error instanceof Error) {
+    return error.message;
+  }
+  
+  // Handle string errors
+  if (typeof error === "string") {
+    return error;
+  }
+  
+  // Handle Response/fetch errors
+  if (error?.message) {
+    return String(error.message);
+  }
+  
+  // Handle JSON error responses
+  if (error?.error && typeof error.error === "string") {
+    return error.error;
+  }
+  
+  // Handle nested error messages
+  if (error?.data?.error) {
+    return String(error.data.error);
+  }
+  
+  // Fallback to JSON stringification for debugging
+  try {
+    return JSON.stringify(error).slice(0, 300);
+  } catch {
+    return String(error).slice(0, 300);
+  }
+}
+
 function Dashboard() {
   const { isAuthed, ready, email, isAdmin } = useAuth();
   const [rows, setRows] = useState<ExtractedRow[]>([]);
@@ -78,7 +115,10 @@ function Dashboard() {
     try {
       const u = (await fetchUsage()) as Usage;
       setUsage(u);
-    } catch { /* noop */ }
+    } catch (e) {
+      console.error("[dashboard] Failed to refresh usage:", extractClientError(e));
+      /* noop */
+    }
   }, [fetchUsage]);
 
   useEffect(() => { setHistory(loadHistory()); }, []);
@@ -126,7 +166,9 @@ function Dashboard() {
           }
           res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
         } catch (e) {
-          throw new Error(e instanceof Error ? e.message : "Failed to process image");
+          const msg = extractClientError(e);
+          console.error("[dashboard] Image extraction failed:", msg);
+          throw new Error(msg || "Failed to process image");
         }
       } else {
         // ── PDF → try text first, fall back to vision if scanned ──
@@ -135,7 +177,9 @@ function Dashboard() {
         try {
           extracted = await extractPdfText(file);
         } catch (e) {
-          throw new Error("Failed to extract PDF text. Try a simpler PDF or use the image mode.");
+          const msg = extractClientError(e);
+          console.error("[dashboard] PDF text extraction failed:", msg);
+          throw new Error(msg || "Failed to extract PDF text. Try a simpler PDF or use the image mode.");
         }
 
         pages = extracted.pages;
@@ -208,10 +252,11 @@ function Dashboard() {
         toast.warning(`You have ${recorded.usage.remaining} upload${recorded.usage.remaining === 1 ? "" : "s"} remaining`);
       }
     } catch (e: unknown) {
-      const error = e instanceof Error ? e.message : "Unknown error";
+      const error = extractClientError(e);
+      console.error("[dashboard] Extraction failed:", { file: file.name, error, rawError: e });
       track("file_upload_failure", { reason: error, duration_ms: Date.now() - started });
       toast.error("Could not process file", {
-        description: error,
+        description: error || "Unknown error occurred. Please try again.",
         action: { label: "Retry", onClick: () => runExtraction(file) },
       });
     } finally {
