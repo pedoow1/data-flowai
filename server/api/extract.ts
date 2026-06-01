@@ -2,128 +2,99 @@ import { createAPIFileRoute } from "@tanstack/react-start/api";
 import { db } from "../../server/db";
 import { jobs, uploads } from "../../shared/schema";
 import { v4 as uuidv4 } from "uuid";
-import * as fs from "fs/promises";
-import * as path from "path";
+import { createClient } from "@supabase/supabase-js";
 
-const UPLOAD_DIR = path.join(process.cwd(), "uploads");
-
-// Ensure uploads directory exists
-async function ensureUploadDir() {
-  try {
-    await fs.mkdir(UPLOAD_DIR, { recursive: true });
-  } catch (error) {
-    console.error("Error creating upload directory:", error);
-  }
-}
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_KEY! // service key مش anon key
+);
 
 export const APIRoute = createAPIFileRoute("/api/extract", "POST")(
   async (request) => {
     try {
-      await ensureUploadDir();
-
       const formData = await request.formData();
       const file = formData.get("file") as File;
       const userId = formData.get("userId") as string;
 
-      if (!file) {
+      if (!file || !userId) {
         return new Response(
-          JSON.stringify({ error: "No file provided" }),
-          {
-            status: 400,
-            headers: { "Content-Type": "application/json" },
-          }
+          JSON.stringify({ error: "File and userId required" }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
         );
       }
 
-      if (!userId) {
-        return new Response(
-          JSON.stringify({ error: "No userId provided" }),
-          {
-            status: 400,
-            headers: { "Content-Type": "application/json" },
-          }
-        );
-      }
-
-      const MAX_FILE_SIZE = parseInt(
-        process.env.MAX_FILE_SIZE || "52428800"
-      ); // 50MB default
+      const MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE || "52428800");
       if (file.size > MAX_FILE_SIZE) {
         return new Response(
-          JSON.stringify({
-            error: `File size exceeds limit of ${MAX_FILE_SIZE / 1024 / 1024}MB`,
-          }),
-          {
-            status: 413,
-            headers: { "Content-Type": "application/json" },
-          }
+          JSON.stringify({ error: "File too large" }),
+          { status: 413, headers: { "Content-Type": "application/json" } }
         );
       }
 
-      // Save file temporarily
+      // ✅ رفع الملف لـ Supabase Storage بدل filesystem
       const uploadId = uuidv4();
-      const fileExt = path.extname(file.name);
-      const filePath = path.join(UPLOAD_DIR, `${uploadId}${fileExt}`);
+      const fileExt = file.name.split(".").pop();
+      const storagePath = `uploads/${userId}/${uploadId}.${fileExt}`;
 
       const buffer = await file.arrayBuffer();
-      await fs.writeFile(filePath, Buffer.from(buffer));
+      const { error: storageError } = await supabase.storage
+        .from("files") // اسم الـ bucket
+        .upload(storagePath, buffer, {
+          contentType: file.type,
+        });
 
-      // Create upload record
-      const uploadRecord = await db
-        .insert(uploads)
-        .values({
-          id: uploadId,
-          userId,
+      if (storageError) throw new Error(storageError.message);
+
+      // ✅ تسجيل الـ upload في DB
+      await db.insert(uploads).values({
+        id: uploadId,
+        userId,
+        fileName: file.name,
+        filePath: storagePath, // مسار Supabase Storage
+        fileSize: file.size,
+        mimeType: file.type,
+        status: "pending",
+      });
+
+      // ✅ إنشاء الـ job في DB
+      const job = await db.insert(jobs).values({
+        userId,
+        uploadId,
+        type: "extraction",
+        status: "pending",
+        input: {
+          uploadId,
+          storagePath, // المسار في Supabase Storage
           fileName: file.name,
-          filePath,
           fileSize: file.size,
           mimeType: file.type,
-          status: "pending",
-        })
-        .returning();
+        },
+      }).returning();
 
-      // Create extraction job
-      const job = await db
-        .insert(jobs)
-        .values({
-          userId,
-          uploadId: uploadId,
-          type: "extraction",
-          status: "pending",
-          input: {
-            uploadId,
-            fileName: file.name,
-            fileSize: file.size,
-            mimeType: file.type,
-          },
-        })
-        .returning();
-
-      console.log(`📤 File uploaded: ${file.name} (Job ID: ${job[0].id})`);
+      // ✅ Trigger الـ Edge Function في الخلفية (fire & forget)
+      fetch(`${process.env.SUPABASE_URL}/functions/v1/process-job`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${process.env.SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({ jobId: job[0].id }),
+      }).catch(console.error); // fire & forget - مش بننتظر الرد
 
       return new Response(
         JSON.stringify({
           success: true,
           jobId: job[0].id,
-          uploadId: uploadId,
-          message: "File uploaded successfully. Processing started.",
+          uploadId,
+          message: "File uploaded. Processing in background.",
         }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }
+        { status: 200, headers: { "Content-Type": "application/json" } }
       );
     } catch (error) {
       console.error("Extract API error:", error);
       return new Response(
-        JSON.stringify({
-          error:
-            error instanceof Error ? error.message : "Upload failed",
-        }),
-        {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        }
+        JSON.stringify({ error: error instanceof Error ? error.message : "Upload failed" }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
       );
     }
   }
