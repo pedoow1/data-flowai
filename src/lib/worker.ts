@@ -2,7 +2,7 @@ import { extractionQueue, updateJobProgress, completeExtractionJob, failExtracti
 import { extractFromText, extractFromImage } from "./extract.functions";
 import { chunkText } from "./extract.functions";
 
-const CHUNK_SIZE = 35000;
+const CHUNK_SIZE = 30000;
 const PARALLEL_LIMIT = 4;
 const BATCH_DELAY_MS = 0;
 
