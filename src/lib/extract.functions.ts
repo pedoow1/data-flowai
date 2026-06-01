@@ -74,6 +74,8 @@ Extraction rules:
 - If a field is genuinely not found in the document, set "v" to "—" and "c" to 0.
 - Output ONLY the raw JSON object. No prose, no markdown, no code fences, no explanation.`;
 
+const MINIMAL_PROMPT = `Extract invoice data. Return ONLY valid JSON: {invoiceNumber, client, date, amount, tax, total}. Each field: {v: string, c: number 0-100}. If missing, set v="—", c=0.`;
+
 const USER_SUFFIX = `\n\nIMPORTANT: Do not truncate any text, numbers, or company names. Copy every value exactly as it appears in the document, character by character.`;
 
 // ── GitHub Models API helper ─────────────────────────────────────────────────
@@ -231,7 +233,7 @@ function mergeResults(results: Array<z.infer<typeof RowSchema>>): z.infer<typeof
 }
 
 // ── Server function: text extraction (gpt-4o-mini) ─────
-// Processes large documents in sequential chunks with delays to respect Vercel timeout
+// Processes large documents in sequential chunks with minimal prompt for speed
 export const extractFromText = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => TextInputSchema.parse(d))
@@ -252,15 +254,17 @@ export const extractFromText = createServerFn({ method: "POST" })
 
     const results: Array<z.infer<typeof RowSchema>> = [];
 
-    // Process each chunk sequentially with delays to respect Vercel timeout
+    // Process each chunk sequentially with minimal prompt to save tokens
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       console.log(`[extract] Processing chunk ${i + 1}/${chunks.length} (${chunk.length} chars)`);
 
+      const chunkPrompt = `${MINIMAL_PROMPT}\n\nDocument: ${data.fileName}\nPart ${i + 1}/${chunks.length}\n\n---\n${chunk}${USER_SUFFIX}`;
+
       const messages = [
         {
           role: "user",
-          content: `${SYSTEM_PROMPT}\n\nDocument filename: ${data.fileName}${chunks.length > 1 ? ` (part ${i + 1}/${chunks.length})` : ""}\n\n---\n${chunk}${USER_SUFFIX}`,
+          content: chunkPrompt,
         },
       ];
 
