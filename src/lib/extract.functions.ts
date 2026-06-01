@@ -12,8 +12,8 @@ const TEXT_MODEL = "gpt-4o-mini";      // Fast text extraction
 const VISION_MODEL = "gpt-4o";         // Best vision model
 const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
-const MAX_TOKENS = 16384;   // Max output tokens for these models
-const CHUNK_SIZE = 40000;   // 40K chars per chunk (~16K tokens), respects free tier limits
+const MAX_TOKENS = 1250;   // 1000-1500 tokens output (middle: 1250)
+const CHUNK_SIZE = 12000;   // ~3000-4000 tokens per chunk (4 chars ≈ 1 token, so 12K chars ≈ 3K tokens)
 const CHUNK_DELAY_MS = 2000;  // 2 second delay between chunks to respect Vercel timeout
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
@@ -246,7 +246,7 @@ export const extractFromText = createServerFn({ method: "POST" })
       return { ok: false as const, error: "__NEEDS_VISION__" };
     }
 
-    // Split into 40K char chunks (~16K tokens each)
+    // Split into 12K char chunks (~3000-4000 tokens each)
     const chunks = chunkText(data.text, CHUNK_SIZE);
     console.log(`[extract] Processing ${chunks.length} chunk(s) for: ${data.fileName}`);
 
