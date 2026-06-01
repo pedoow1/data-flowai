@@ -6,14 +6,15 @@ import { ADMIN_EMAIL } from "./config";
 
 // ── API configuration ────────────────────────────────────────────────────────
 // GitHub Models API (Free tier from GitHub)
-// Text extraction: Mistral-medium-2505 (128K context - reads 500+ page documents)
+// Text extraction: Mistral-medium-2505 (128K context - reads large documents)
 // Vision extraction: Phi-4-reasoning (advanced vision understanding + reasoning)
 const TEXT_MODEL = "Mistral-medium-2505";      // 128K tokens context
 const VISION_MODEL = "Phi-4-reasoning";         // Best vision model
 const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
 const MAX_TOKENS = 16384;   // Max output tokens for these models
-const CHUNK_SIZE = 20000;   // 20K chars per chunk to avoid memory issues and request size limits
+const CHUNK_SIZE = 40000;   // 40K chars per chunk (~16K tokens), respects free tier limits
+const CHUNK_DELAY_MS = 2000;  // 2 second delay between chunks to respect Vercel timeout
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
   const isAdminEmail =
@@ -192,7 +193,7 @@ async function runWithRetry(
   return { ok: false, error: `${lastError} Please try again.` };
 }
 
-// ── Chunking helper ──────────────────────────────────────────────────────────
+// ── Chunking helper ────────────────────────────────────────────────────────────
 function chunkText(text: string, chunkSize: number): string[] {
   const chunks: string[] = [];
   for (let i = 0; i < text.length; i += chunkSize) {
@@ -230,7 +231,7 @@ function mergeResults(results: Array<z.infer<typeof RowSchema>>): z.infer<typeof
 }
 
 // ── Server function: text extraction (Mistral-medium-2505 - 128K context) ─────
-// Processes large documents in memory-efficient chunks
+// Processes large documents in sequential chunks with delays to respect Vercel timeout
 export const extractFromText = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => TextInputSchema.parse(d))
@@ -245,13 +246,13 @@ export const extractFromText = createServerFn({ method: "POST" })
       return { ok: false as const, error: "__NEEDS_VISION__" };
     }
 
-    // Split into manageable chunks to avoid memory issues
+    // Split into 40K char chunks (~16K tokens each)
     const chunks = chunkText(data.text, CHUNK_SIZE);
-    console.log(`[extract] Processing ${chunks.length} chunks for: ${data.fileName}`);
+    console.log(`[extract] Processing ${chunks.length} chunk(s) for: ${data.fileName}`);
 
     const results: Array<z.infer<typeof RowSchema>> = [];
 
-    // Process each chunk sequentially to avoid memory spikes
+    // Process each chunk sequentially with delays to respect Vercel timeout
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       console.log(`[extract] Processing chunk ${i + 1}/${chunks.length} (${chunk.length} chars)`);
@@ -259,7 +260,7 @@ export const extractFromText = createServerFn({ method: "POST" })
       const messages = [
         {
           role: "user",
-          content: `${SYSTEM_PROMPT}\n\nDocument filename: ${data.fileName}\nChunk ${i + 1}/${chunks.length}\n\n---\n${chunk}${USER_SUFFIX}`,
+          content: `${SYSTEM_PROMPT}\n\nDocument filename: ${data.fileName}${chunks.length > 1 ? ` (part ${i + 1}/${chunks.length})` : ""}\n\n---\n${chunk}${USER_SUFFIX}`,
         },
       ];
 
@@ -277,9 +278,10 @@ export const extractFromText = createServerFn({ method: "POST" })
         // For subsequent chunks, continue with what we have
       }
 
-      // Allow garbage collection between chunks
+      // Delay between chunks to respect Vercel timeout (except after last chunk)
       if (i < chunks.length - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        console.log(`[extract] Waiting ${CHUNK_DELAY_MS}ms before next chunk...`);
+        await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
       }
     }
 
@@ -289,6 +291,7 @@ export const extractFromText = createServerFn({ method: "POST" })
 
     // Merge results from all chunks - use highest confidence for each field
     const merged = mergeResults(results);
+    console.log(`[extract] Successfully processed all ${chunks.length} chunk(s)`);
     return { ok: true as const, row: merged };
   });
 
