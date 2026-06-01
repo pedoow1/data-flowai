@@ -6,10 +6,10 @@ import { ADMIN_EMAIL } from "./config";
 
 // ── API configuration ────────────────────────────────────────────────────────
 // GitHub Models API (Free tier from GitHub)
-// Text extraction: Mistral-medium-2505 (128K context - reads large documents)
-// Vision extraction: Phi-4-reasoning (advanced vision understanding + reasoning)
-const TEXT_MODEL = "Mistral-medium-2505";      // 128K tokens context
-const VISION_MODEL = "Phi-4-reasoning";         // Best vision model
+// Text extraction: gpt-4o-mini (fast + accurate for text)
+// Vision extraction: gpt-4o (best vision understanding)
+const TEXT_MODEL = "gpt-4o-mini";      // Fast text extraction
+const VISION_MODEL = "gpt-4o";         // Best vision model
 const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
 const MAX_TOKENS = 16384;   // Max output tokens for these models
@@ -230,7 +230,7 @@ function mergeResults(results: Array<z.infer<typeof RowSchema>>): z.infer<typeof
   return merged;
 }
 
-// ── Server function: text extraction (Mistral-medium-2505 - 128K context) ─────
+// ── Server function: text extraction (gpt-4o-mini) ─────
 // Processes large documents in sequential chunks with delays to respect Vercel timeout
 export const extractFromText = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -295,7 +295,7 @@ export const extractFromText = createServerFn({ method: "POST" })
     return { ok: true as const, row: merged };
   });
 
-// ── Server function: vision extraction (Phi-4-reasoning - advanced vision) ────
+// ── Server function: vision extraction (gpt-4o) ────
 export const extractFromImage = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => ImageInputSchema.parse(d))
