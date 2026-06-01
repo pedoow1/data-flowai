@@ -74,7 +74,18 @@ Extraction rules:
 - If a field is genuinely not found in the document, set "v" to "—" and "c" to 0.
 - Output ONLY the raw JSON object. No prose, no markdown, no code fences, no explanation.`;
 
-const MINIMAL_PROMPT = `Extract invoice data. Return ONLY valid JSON: {invoiceNumber, client, date, amount, tax, total}. Each field: {v: string, c: number 0-100}. If missing, set v="—", c=0.`;
+const MINIMAL_PROMPT = `You are an invoice data extraction engine. Extract these 6 fields from the document:
+- invoiceNumber (invoice/receipt number)
+- client (customer/buyer name)
+- date (invoice date, use YYYY-MM-DD if possible)
+- amount (subtotal before tax, with currency)
+- tax (tax/VAT amount, with currency, or "—" if absent)
+- total (grand total with tax, with currency)
+
+For each field, provide: {v: "exact value from document", c: confidence 0-100}
+If field missing: {v: "—", c: 0}
+
+Return ONLY valid JSON object, no explanation.`;
 
 const USER_SUFFIX = `\n\nIMPORTANT: Do not truncate any text, numbers, or company names. Copy every value exactly as it appears in the document, character by character.`;
 
@@ -142,7 +153,7 @@ function parseGitHubResponse(
   return { ok: true, row: validated.data };
 }
 
-// ── Retry wrapper for GitHub Models ──────────────────────────────────────────
+// ── Retry wrapper for GitHub Models ──────────────────────────��───────────────
 async function runWithRetry(
   token: string,
   model: string,
@@ -195,7 +206,7 @@ async function runWithRetry(
   return { ok: false, error: `${lastError} Please try again.` };
 }
 
-// ── Chunking helper ──────────────────────────────────────────────────────────
+// ── Chunking helper ────────────────────────────────────────────────────────
 function chunkText(text: string, chunkSize: number): string[] {
   const chunks: string[] = [];
   for (let i = 0; i < text.length; i += chunkSize) {
@@ -204,7 +215,7 @@ function chunkText(text: string, chunkSize: number): string[] {
   return chunks.length > 0 ? chunks : [""];
 }
 
-// ── Merge results from multiple chunks ───────────────────────────────────────
+// ── Merge results from multiple chunks ──────────────────────────��────────────
 // Takes highest confidence for each field across all chunks
 function mergeResults(results: Array<z.infer<typeof RowSchema>>): z.infer<typeof RowSchema> {
   const merged: z.infer<typeof RowSchema> = {
@@ -322,7 +333,7 @@ export const extractFromImage = createServerFn({ method: "POST" })
           },
           {
             type: "text",
-            text: `${SYSTEM_PROMPT}\n\nDocument filename: ${data.fileName}\n\nExtract all relevant fields from this document image and return ONLY the JSON object.${USER_SUFFIX}`,
+            text: `${MINIMAL_PROMPT}\n\nDocument filename: ${data.fileName}\n\nExtract data from this document image. Return ONLY the JSON object.${USER_SUFFIX}`,
           },
         ],
       },
