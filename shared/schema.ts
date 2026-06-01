@@ -1,7 +1,8 @@
-import { pgTable, uuid, text, timestamp, pgEnum, boolean, integer } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, pgEnum, boolean, integer, json } from "drizzle-orm/pg-core";
 
 export const appRoleEnum = pgEnum("app_role", ["admin", "user"]);
 export const planTierEnum = pgEnum("plan_tier", ["free", "pro", "team"]);
+export const jobStatusEnum = pgEnum("job_status", ["pending", "processing", "completed", "failed"]);
 
 export const profiles = pgTable("profiles", {
   id: text("id").primaryKey(),
@@ -48,4 +49,22 @@ export const pendingSubscriptions = pgTable("pending_subscriptions", {
   gumroadSaleId: text("gumroad_sale_id"),
   gumroadSubscriptionId: text("gumroad_subscription_id"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// Jobs table for background task processing
+export const jobs = pgTable("jobs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: text("user_id").notNull().references(() => profiles.id, { onDelete: "cascade" }),
+  uploadId: uuid("upload_id").references(() => uploads.id, { onDelete: "cascade" }),
+  type: text("type").notNull(), // e.g., "extract", "process", "analyze"
+  status: jobStatusEnum("status").notNull().default("pending"),
+  input: json("input").notNull(), // Stores file metadata, parameters
+  output: json("output"), // Stores results
+  error: text("error"), // Error message if failed
+  attempts: integer("attempts").notNull().default(0),
+  maxAttempts: integer("max_attempts").notNull().default(3),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
