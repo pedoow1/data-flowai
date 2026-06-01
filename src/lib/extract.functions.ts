@@ -13,7 +13,7 @@ const VISION_MODEL = "gpt-4o";         // Best vision model
 const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
 const MAX_TOKENS = 8000;   // 8000 tokens max for output (GitHub Models limit)
-const CHUNK_SIZE = 12000;   // ~3000-4000 tokens per chunk (4 chars ≈ 1 token, so 12K chars ≈ 3K tokens)
+const CHUNK_SIZE = 8000;    // 8K chars per chunk for faster processing
 const CHUNK_DELAY_MS = 2000;  // 2 second delay between chunks to respect Vercel timeout
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
@@ -193,7 +193,7 @@ async function runWithRetry(
   return { ok: false, error: `${lastError} Please try again.` };
 }
 
-// ── Chunking helper ────────────────────────────────────────────────────────────
+// ── Chunking helper ─���────────────────────────────────────────────────────────
 function chunkText(text: string, chunkSize: number): string[] {
   const chunks: string[] = [];
   for (let i = 0; i < text.length; i += chunkSize) {
@@ -246,7 +246,7 @@ export const extractFromText = createServerFn({ method: "POST" })
       return { ok: false as const, error: "__NEEDS_VISION__" };
     }
 
-    // Split into 12K char chunks (~3000-4000 tokens each)
+    // Split into 8K char chunks for faster processing
     const chunks = chunkText(data.text, CHUNK_SIZE);
     console.log(`[extract] Processing ${chunks.length} chunk(s) for: ${data.fileName}`);
 
