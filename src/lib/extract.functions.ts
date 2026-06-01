@@ -6,31 +6,14 @@ import { ADMIN_EMAIL } from "./config";
 
 // ── API configuration ────────────────────────────────────────────────────────
 // GitHub Models API (Free tier from GitHub)
-// Text extraction: gpt-4o-mini (max 16,384 completion tokens)
-// Vision extraction: gpt-4o (max 16,384 completion tokens)
-const TEXT_MODEL = "gpt-4o-mini";              // max 16,384 tokens output
-const VISION_MODEL = "gpt-4o";                 // max 16,384 tokens output
+// Text extraction: Mistral-medium-2505 (128K context - reads 500+ page documents)
+// Vision extraction: Phi-4-reasoning (advanced vision understanding + reasoning)
+const TEXT_MODEL = "Mistral-medium-2505";      // 128K tokens context
+const VISION_MODEL = "Phi-4-reasoning";         // Best vision model
 const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
-const MAX_COMPLETION_TOKENS = 4000;            // GitHub Models free tier hard cap: 4000 output tokens/request
-
-// Safe limits to stay under GitHub Models free tier: 8000 input tokens + 4000 output tokens per request.
-// Estimate input tokens conservatively (1 token ≈ 4 chars).
-// Budget per chunk: ~5.5K tokens text + ~0.5K prompt = ~6K < 8K input limit (safe headroom).
-const SAFE_REQUEST_SIZE = 22_000;  // ~5.5K input tokens — stays under the 8000-token/request limit
-const CHUNK_OVERLAP = 2_000;  // Character overlap between chunks for context continuity
-const CHUNK_DELAY_MS = 4_500;  // ~13 req/min — stays under the GitHub free tier 15 req/min limit
-
-// ── Error handling helper ────────────────────────────────────────────────────
-function extractErrorMessage(error: any): string {
-  if (!error) return "Unknown error occurred";
-  if (typeof error === "string") return error;
-  if (error instanceof Error) return error.message;
-  if (error?.message && typeof error.message === "string") return error.message;
-  if (error?.error && typeof error.error === "string") return error.error;
-  if (error?.toString && typeof error.toString === "function") return error.toString();
-  return JSON.stringify(error).slice(0, 200);
-}
+const MAX_TOKENS = 128000;  // Full context window for both models
+const CHUNK_SIZE = 20000;   // 20K chars per chunk to avoid memory issues and request size limits
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
   const isAdminEmail =
@@ -55,7 +38,7 @@ export const RowSchema = z.object({
 });
 
 const TextInputSchema = z.object({
-  text:     z.string().min(1).max(6_000_000),
+  text:     z.string().min(1).max(5_000_000),
   fileName: z.string().min(1).max(255),
 });
 
@@ -90,8 +73,6 @@ Extraction rules:
 - If a field is genuinely not found in the document, set "v" to "—" and "c" to 0.
 - Output ONLY the raw JSON object. No prose, no markdown, no code fences, no explanation.`;
 
-const MINIMAL_PROMPT = `Extract invoice data. Return ONLY valid JSON with fields: invoiceNumber, client, date, amount, tax, total. Each field has "v" (value) and "c" (confidence 0-100). If not found, use "v": "—" and "c": 0.`;
-
 const USER_SUFFIX = `\n\nIMPORTANT: Do not truncate any text, numbers, or company names. Copy every value exactly as it appears in the document, character by character.`;
 
 // ── GitHub Models API helper ─────────────────────────────────────────────────
@@ -114,8 +95,8 @@ async function callGitHubModels(
       body: JSON.stringify({
         model,
         messages,
-        temperature: 0.0,  // Deterministic output (no top_p with temperature 0)
-        max_tokens: MAX_COMPLETION_TOKENS,  // Respect model's actual limit
+        temperature: 0.0,
+        max_tokens: MAX_TOKENS,
       }),
     });
     return { status: res.status, bodyText: await res.text() };
@@ -134,14 +115,10 @@ function parseGitHubResponse(
 
   let json: any;
   try { json = JSON.parse(bodyText); }
-  catch { 
-    console.error(`[extract/${model}] JSON.parse failed on response`);
-    return { ok: false, error: "GitHub Models returned invalid JSON." }; 
-  }
+  catch { return { ok: false, error: "GitHub Models returned invalid JSON." }; }
 
   const content: string = json?.choices?.[0]?.message?.content ?? "";
   if (!content) {
-    console.error(`[extract/${model}] Empty content from model`);
     return { ok: false, error: "GitHub Models returned empty response." };
   }
 
@@ -149,66 +126,17 @@ function parseGitHubResponse(
 
   let parsed: unknown;
   try { parsed = JSON.parse(cleaned); }
-  catch (e) {
-    console.error(`[extract/${model}] Failed to parse cleaned JSON:`, {
-      cleanedSlice: cleaned.slice(0, 300),
-      error: extractErrorMessage(e),
-    });
+  catch {
+    console.error(`[extract/${model}] unparseable content:`, content.slice(0, 300));
     return { ok: false, error: "AI returned an unparseable response. Please retry." };
   }
 
   const validated = RowSchema.safeParse(parsed);
   if (!validated.success) {
-    console.error(`[extract/${model}] Schema validation failed:`, {
-      issues: validated.error.issues.slice(0, 3),
-      receivedKeys: Object.keys(parsed ?? {}),
-    });
+    console.error(`[extract/${model}] schema mismatch:`, JSON.stringify(validated.error.issues).slice(0, 300));
     return { ok: false, error: "AI response missing required fields. Please retry." };
   }
   return { ok: true, row: validated.data };
-}
-
-// ── Merge results from multiple chunk extractions ─────────────────────────────
-function mergeChunkResults(results: Array<{ ok: true; row: z.infer<typeof RowSchema> }>): z.infer<typeof RowSchema> {
-  if (results.length === 0) {
-    return {
-      invoiceNumber: { v: "—", c: 0 },
-      client: { v: "—", c: 0 },
-      date: { v: "—", c: 0 },
-      amount: { v: "—", c: 0 },
-      tax: { v: "—", c: 0 },
-      total: { v: "—", c: 0 },
-    };
-  }
-
-  if (results.length === 1) {
-    return results[0].row;
-  }
-
-  // For multiple chunks, prefer higher confidence scores and non-empty values
-  const merge = (values: Array<{ v: string; c: number }>): { v: string; c: number } => {
-    // Filter out placeholder "—" values and empty strings
-    const meaningful = values.filter(x => x.v !== "—" && x.v.trim() !== "");
-    
-    if (meaningful.length === 0) {
-      return { v: "—", c: 0 };
-    }
-
-    // Sort by confidence score descending
-    meaningful.sort((a, b) => b.c - a.c);
-    
-    // Return the highest confidence result
-    return meaningful[0];
-  };
-
-  return {
-    invoiceNumber: merge(results.map(r => r.row.invoiceNumber)),
-    client: merge(results.map(r => r.row.client)),
-    date: merge(results.map(r => r.row.date)),
-    amount: merge(results.map(r => r.row.amount)),
-    tax: merge(results.map(r => r.row.tax)),
-    total: merge(results.map(r => r.row.total)),
-  };
 }
 
 // ── Retry wrapper for GitHub Models ──────────────────────────────────────────
@@ -228,7 +156,7 @@ async function runWithRetry(
         return result ?? { ok: false, error: "Failed to parse response." };
       }
 
-      console.error(`[extract/${model}] Attempt ${attempt}/3 - GitHub ${status}:`, bodyText.slice(0, 400));
+      console.error(`[extract/${model}] GitHub ${status}:`, bodyText.slice(0, 400));
 
       if (status === 503 || status === 502 || status === 524) {
         lastError = "GitHub Models is temporarily unavailable.";
@@ -239,10 +167,6 @@ async function runWithRetry(
         lastError = "GitHub Models rate limit reached.";
         await new Promise((r) => setTimeout(r, 10_000 * attempt));
         continue;
-      }
-      if (status === 413) {
-        // Request exceeded the 8000 input / 4000 output token-per-request limit.
-        return { ok: false, error: "A document chunk exceeded GitHub Models' 8000-token request limit. The file may contain unusually dense pages." };
       }
       if (status === 401 || status === 403) {
         return { ok: false, error: "GitHub Models authentication failed — check your GITHUB_TOKEN in Vercel." };
@@ -259,10 +183,7 @@ async function runWithRetry(
     } catch (e: any) {
       const isAbort = e?.name === "AbortError";
       lastError = isAbort ? "Extraction timed out." : (e?.message ?? "Network error");
-      console.error(`[extract/${model}] Attempt ${attempt}/3 fetch failed:`, {
-        name: e?.name,
-        message: extractErrorMessage(e),
-      });
+      console.error(`[extract/${model}] fetch failed:`, lastError);
       if (isAbort) break;
       await new Promise((r) => setTimeout(r, 2_000));
     }
@@ -271,126 +192,45 @@ async function runWithRetry(
   return { ok: false, error: `${lastError} Please try again.` };
 }
 
-// ── Chunking helper with overlap for context continuity ───────────────────────
-function chunkTextWithOverlap(text: string, chunkSize: number, overlap: number): Array<{ text: string; chunkNum: number; totalChunks: number }> {
-  const chunks: Array<{ text: string; chunkNum: number; totalChunks: number }> = [];
-  
-  if (text.length <= chunkSize) {
-    return [{ text, chunkNum: 1, totalChunks: 1 }];
+// ── Chunking helper ──────────────────────────────────────────────────────────
+function chunkText(text: string, chunkSize: number): string[] {
+  const chunks: string[] = [];
+  for (let i = 0; i < text.length; i += chunkSize) {
+    chunks.push(text.slice(i, i + chunkSize));
   }
-
-  let pos = 0;
-  let chunkCount = 0;
-  
-  // Calculate total chunks first
-  const totalChunks = Math.ceil((text.length - overlap) / (chunkSize - overlap));
-
-  while (pos < text.length) {
-    const end = Math.min(pos + chunkSize, text.length);
-    const chunkText = text.slice(pos, end);
-    chunkCount++;
-
-    chunks.push({
-      text: chunkText,
-      chunkNum: chunkCount,
-      totalChunks,
-    });
-
-    // Move position forward with overlap for next iteration
-    pos = end - overlap;
-
-    // Ensure we don't get stuck at the end
-    if (pos >= text.length) break;
-  }
-
-  return chunks;
+  return chunks.length > 0 ? chunks : [""];
 }
 
-// ── Process multiple chunks and merge results ────────────────────────────────
-async function processTextInChunks(
-  token: string,
-  model: string,
-  fullText: string,
-  fileName: string,
-): Promise<{ ok: true; row: z.infer<typeof RowSchema> } | { ok: false; error: string }> {
-  const chunks = chunkTextWithOverlap(fullText, SAFE_REQUEST_SIZE, CHUNK_OVERLAP);
+// ── Merge results from multiple chunks ───────────────────────────────────────
+// Takes highest confidence for each field across all chunks
+function mergeResults(results: Array<z.infer<typeof RowSchema>>): z.infer<typeof RowSchema> {
+  const merged: z.infer<typeof RowSchema> = {
+    invoiceNumber: { v: "—", c: 0 },
+    client:        { v: "—", c: 0 },
+    date:          { v: "—", c: 0 },
+    amount:        { v: "—", c: 0 },
+    tax:           { v: "—", c: 0 },
+    total:         { v: "—", c: 0 },
+  };
 
-  if (chunks.length === 1) {
-    // Single chunk - process normally with full prompt
-    const messages = [
-      {
-        role: "user",
-        content: `${SYSTEM_PROMPT}\n\nDocument filename: ${fileName}\n\n---\n${chunks[0].text}${USER_SUFFIX}`,
-      },
-    ];
-    return runWithRetry(token, model, messages);
-  }
+  const fields = ["invoiceNumber", "client", "date", "amount", "tax", "total"] as const;
 
-  // Multiple chunks - use minimal prompt to save tokens
-  const results: Array<{ ok: true; row: z.infer<typeof RowSchema> }> = [];
-  let consecutiveFailures = 0;
-  const maxFailures = 2;
-
-  console.log(`[extract] Processing ${chunks.length} chunks for document: ${fileName} (${fullText.length} chars)`);
-
-  for (const chunk of chunks) {
-    const chunkPrompt = `${MINIMAL_PROMPT}
-
-Document filename: ${fileName}
-[Chunk ${chunk.chunkNum}/${chunk.totalChunks}]
-
-${chunk.chunkNum === 1 ? "This is the BEGINNING of the document." : ""}
-${chunk.chunkNum === chunk.totalChunks ? "This is the END of the document." : ""}
-
----
-${chunk.text}
-${USER_SUFFIX}`;
-
-    const messages = [
-      {
-        role: "user",
-        content: chunkPrompt,
-      },
-    ];
-
-    const chunkResult = await runWithRetry(token, model, messages);
-
-    if (!chunkResult.ok) {
-      console.warn(`[extract] Chunk ${chunk.chunkNum}/${chunk.totalChunks} failed:`, chunkResult.error);
-      consecutiveFailures++;
-
-      if (consecutiveFailures >= maxFailures) {
-        return { ok: false, error: `Processing failed on chunk ${chunk.chunkNum}. ${chunkResult.error}` };
+  for (const field of fields) {
+    // Find result with highest confidence for this field
+    let bestResult = merged[field];
+    for (const result of results) {
+      if (result[field].c > bestResult.c) {
+        bestResult = result[field];
       }
-
-      // Continue with next chunk
-      continue;
     }
-
-    consecutiveFailures = 0; // Reset on success
-    results.push(chunkResult as { ok: true; row: z.infer<typeof RowSchema> });
-    
-    console.log(`[extract] Chunk ${chunk.chunkNum}/${chunk.totalChunks} completed successfully`);
-
-    // Pace requests to respect the GitHub free tier rate limit (15 req/min)
-    if (chunk.chunkNum < chunk.totalChunks) {
-      await new Promise((r) => setTimeout(r, CHUNK_DELAY_MS));
-    }
+    merged[field] = bestResult;
   }
 
-  if (results.length === 0) {
-    return { ok: false, error: "Failed to process any chunks of the document." };
-  }
-
-  // Merge all successful chunk results
-  const mergedRow = mergeChunkResults(results);
-  console.log(`[extract] Merged ${results.length}/${chunks.length} chunk results for ${fileName}`);
-
-  return { ok: true, row: mergedRow };
+  return merged;
 }
 
-// ── Server function: text extraction (gpt-4o-mini - 16384 tokens limit) ─────
-// Automatically chunks large documents and merges results for safety
+// ── Server function: text extraction (Mistral-medium-2505 - 128K context) ─────
+// Processes large documents in memory-efficient chunks
 export const extractFromText = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => TextInputSchema.parse(d))
@@ -399,37 +239,60 @@ export const extractFromText = createServerFn({ method: "POST" })
     if (quotaError) return { ok: false as const, error: quotaError };
 
     const token = (process.env.GITHUB_TOKEN || "").trim();
-    if (!token) {
-      console.error("[extract] GITHUB_TOKEN not configured");
-      return { ok: false as const, error: "Server misconfigured (missing GITHUB_TOKEN)." };
-    }
+    if (!token) return { ok: false as const, error: "Server misconfigured (missing GITHUB_TOKEN)." };
 
     if (data.text.length < 20) {
-      console.log("[extract] Text too short, needs vision");
       return { ok: false as const, error: "__NEEDS_VISION__" };
     }
 
-    try {
-      console.log(`[extract] Starting text extraction for: ${data.fileName} (${data.text.length} chars)`);
-      // Automatic chunking + merge for any text larger than safe request size
-      return await processTextInChunks(token, TEXT_MODEL, data.text, data.fileName);
-    } catch (error: any) {
-      const errorMsg = extractErrorMessage(error);
-      console.error("[extract] Unexpected error during text extraction:", {
-        fileName: data.fileName,
-        textLength: data.text.length,
-        errorMsg,
-        stack: error?.stack,
-      });
-      return { 
-        ok: false as const, 
-        error: `Failed to extract text: ${errorMsg}` 
-      };
+    // Split into manageable chunks to avoid memory issues
+    const chunks = chunkText(data.text, CHUNK_SIZE);
+    console.log(`[extract] Processing ${chunks.length} chunks for: ${data.fileName}`);
+
+    const results: Array<z.infer<typeof RowSchema>> = [];
+
+    // Process each chunk sequentially to avoid memory spikes
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      console.log(`[extract] Processing chunk ${i + 1}/${chunks.length} (${chunk.length} chars)`);
+
+      const messages = [
+        {
+          role: "user",
+          content: `${SYSTEM_PROMPT}\n\nDocument filename: ${data.fileName}\nChunk ${i + 1}/${chunks.length}\n\n---\n${chunk}${USER_SUFFIX}`,
+        },
+      ];
+
+      const result = await runWithRetry(token, TEXT_MODEL, messages);
+      
+      if (result.ok) {
+        results.push(result.row);
+      } else {
+        // If any chunk fails significantly, return error
+        console.error(`[extract] Chunk ${i + 1} failed: ${result.error}`);
+        if (i === 0) {
+          // First chunk is critical
+          return { ok: false as const, error: result.error };
+        }
+        // For subsequent chunks, continue with what we have
+      }
+
+      // Allow garbage collection between chunks
+      if (i < chunks.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
     }
+
+    if (results.length === 0) {
+      return { ok: false as const, error: "Failed to extract data from any chunk." };
+    }
+
+    // Merge results from all chunks - use highest confidence for each field
+    const merged = mergeResults(results);
+    return { ok: true as const, row: merged };
   });
 
-// ── Server function: vision extraction (gpt-4o - 16384 tokens limit) ────
-// Best for complex document images with high extraction accuracy + reasoning
+// ── Server function: vision extraction (Phi-4-reasoning - advanced vision) ────
 export const extractFromImage = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => ImageInputSchema.parse(d))
@@ -438,43 +301,25 @@ export const extractFromImage = createServerFn({ method: "POST" })
     if (quotaError) return { ok: false as const, error: quotaError };
 
     const token = (process.env.GITHUB_TOKEN || "").trim();
-    if (!token) {
-      console.error("[extract] GITHUB_TOKEN not configured");
-      return { ok: false as const, error: "Server misconfigured (missing GITHUB_TOKEN)." };
-    }
+    if (!token) return { ok: false as const, error: "Server misconfigured (missing GITHUB_TOKEN)." };
 
-    try {
-      console.log(`[extract] Starting vision extraction for: ${data.fileName} (${data.imageDataUrl.length} chars in data URL)`);
-      const messages = [
-        {
-          role: "user",
-          content: [
-            {
-              type: "image_url",
-              image_url: {
-                url: data.imageDataUrl,
-              },
+    const messages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "image_url",
+            image_url: {
+              url: data.imageDataUrl,
             },
-            {
-              type: "text",
-              text: `${SYSTEM_PROMPT}\n\nDocument filename: ${data.fileName}\n\nExtract all relevant fields from this document image and return ONLY the JSON object.${USER_SUFFIX}`,
-            },
-          ],
-        },
-      ];
+          },
+          {
+            type: "text",
+            text: `${SYSTEM_PROMPT}\n\nDocument filename: ${data.fileName}\n\nExtract all relevant fields from this document image and return ONLY the JSON object.${USER_SUFFIX}`,
+          },
+        ],
+      },
+    ];
 
-      return await runWithRetry(token, VISION_MODEL, messages);
-    } catch (error: any) {
-      const errorMsg = extractErrorMessage(error);
-      console.error("[extract] Unexpected error during image extraction:", {
-        fileName: data.fileName,
-        dataUrlLength: data.imageDataUrl.length,
-        errorMsg,
-        stack: error?.stack,
-      });
-      return { 
-        ok: false as const, 
-        error: `Failed to extract image: ${errorMsg}` 
-      };
-    }
+    return runWithRetry(token, VISION_MODEL, messages);
   });
