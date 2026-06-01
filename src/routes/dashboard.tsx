@@ -140,7 +140,7 @@ function Dashboard() {
 
         pages = extracted.pages;
         const charCount = extracted.text.length;
-        const tokenEstimate = estimateTokens(charCount);
+        const tokenEstimate = estimateTokens(extracted.text);
 
         // ✅ Check if text content is reasonable (based on character/token count)
         if (charCount < 20) {
