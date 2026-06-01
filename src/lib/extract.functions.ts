@@ -15,6 +15,9 @@ const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
 const MAX_TOKENS = 8000;   // 8000 tokens max for output (GitHub Models limit)
 const CHUNK_SIZE = 8000;    // 8K chars per chunk for faster processing
 const CHUNK_DELAY_MS = 1000;  // 1 second delay between chunks to respect Vercel timeout
+const VERCEL_TIMEOUT_MS = 30_000;  // Vercel function timeout (30 seconds)
+const CHUNK_DEADLINE_MS = 20_000;  // Stop sequential when 20 sec elapsed (safety margin)
+const PARALLEL_LIMIT = 2;  // Process max 2 chunks in parallel
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
   const isAdminEmail =
@@ -236,8 +239,31 @@ function chunkText(text: string, chunkSize: number): string[] {
   return chunks.length > 0 ? chunks : [""];
 }
 
+// ── Process single chunk (helper) ──────────────────────────────────────────
+async function processChunk(
+  token: string,
+  model: string,
+  chunk: string,
+  fileName: string,
+  chunkIndex: number,
+  totalChunks: number,
+): Promise<{ ok: true; rows: Array<z.infer<typeof RowSchema>> } | { ok: false; error: string }> {
+  console.log(`[extract] Processing chunk ${chunkIndex + 1}/${totalChunks} (${chunk.length} chars)`);
+
+  const chunkPrompt = `${MINIMAL_PROMPT}\n\nDocument: ${fileName}\nPart ${chunkIndex + 1}/${totalChunks}\n\n---\n${chunk}${USER_SUFFIX}`;
+
+  const messages = [
+    {
+      role: "user",
+      content: chunkPrompt,
+    },
+  ];
+
+  return runWithRetry(token, model, messages);
+}
+
 // ── Merge results from multiple chunks ───────────────────────────────────────
-// Takes highest confidence for each field across all chunks
+// Takes highest confidence for each field across all chunks (for single invoice only)
 function mergeResults(results: Array<z.infer<typeof RowSchema>>): z.infer<typeof RowSchema> {
   const merged: z.infer<typeof RowSchema> = {
     invoiceNumber: { v: "—", c: 0 },
@@ -265,8 +291,8 @@ function mergeResults(results: Array<z.infer<typeof RowSchema>>): z.infer<typeof
 }
 
 // ── Server function: text extraction (gpt-4o-mini) ─────
-// Processes large documents in sequential 8K char chunks with minimal prompt
-// Each chunk may contain multiple invoices - model extracts all
+// Processes large documents with hybrid sequential/parallel strategy
+// Switches to parallel when approaching Vercel timeout
 export const extractFromText = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => TextInputSchema.parse(d))
@@ -286,28 +312,28 @@ export const extractFromText = createServerFn({ method: "POST" })
     console.log(`[extract] Processing ${chunks.length} chunk(s) for: ${data.fileName}`);
 
     const allResults: Array<z.infer<typeof RowSchema>> = [];
+    const startTime = Date.now();
+    let elapsedTime = 0;
 
-    // Process each chunk sequentially with minimal prompt to save tokens
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      console.log(`[extract] Processing chunk ${i + 1}/${chunks.length} (${chunk.length} chars)`);
+    let i = 0;
 
-      const chunkPrompt = `${MINIMAL_PROMPT}\n\nDocument: ${data.fileName}\nPart ${i + 1}/${chunks.length}\n\n---\n${chunk}${USER_SUFFIX}`;
+    // ── Phase 1: Sequential processing until approaching timeout ──
+    console.log(`[extract] Phase 1: Sequential processing...`);
+    while (i < chunks.length) {
+      elapsedTime = Date.now() - startTime;
 
-      const messages = [
-        {
-          role: "user",
-          content: chunkPrompt,
-        },
-      ];
+      // Check if we should switch to parallel (with 10-second safety margin)
+      if (elapsedTime + CHUNK_DEADLINE_MS > VERCEL_TIMEOUT_MS - 10_000) {
+        console.log(`[extract] Time approaching limit (${elapsedTime}ms). Switching to parallel mode for remaining ${chunks.length - i} chunk(s)`);
+        break;
+      }
 
-      const result = await runWithRetry(token, TEXT_MODEL, messages);
-      
+      const result = await processChunk(token, TEXT_MODEL, chunks[i], data.fileName, i, chunks.length);
+
       if (result.ok) {
         allResults.push(...result.rows);
         console.log(`[extract] Chunk ${i + 1}: extracted ${result.rows.length} invoice(s)`);
       } else {
-        // If any chunk fails significantly, return error
         console.error(`[extract] Chunk ${i + 1} failed: ${result.error}`);
         if (i === 0) {
           // First chunk is critical
@@ -316,10 +342,49 @@ export const extractFromText = createServerFn({ method: "POST" })
         // For subsequent chunks, continue with what we have
       }
 
-      // Delay between chunks to respect Vercel timeout (except after last chunk)
+      // Delay between sequential chunks
       if (i < chunks.length - 1) {
         console.log(`[extract] Waiting ${CHUNK_DELAY_MS}ms before next chunk...`);
         await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
+      }
+
+      i++;
+    }
+
+    // ── Phase 2: Parallel processing for remaining chunks ──
+    if (i < chunks.length) {
+      console.log(`[extract] Phase 2: Parallel processing ${chunks.length - i} remaining chunk(s) with limit of ${PARALLEL_LIMIT}...`);
+
+      const remainingChunks = chunks.slice(i);
+
+      // Process in batches of PARALLEL_LIMIT
+      for (let batchStart = 0; batchStart < remainingChunks.length; batchStart += PARALLEL_LIMIT) {
+        const batchEnd = Math.min(batchStart + PARALLEL_LIMIT, remainingChunks.length);
+        const batchChunks = remainingChunks.slice(batchStart, batchEnd);
+
+        console.log(`[extract] Processing parallel batch: chunks ${i + batchStart + 1} to ${i + batchEnd}`);
+
+        // Process batch in parallel
+        const batchPromises = batchChunks.map((chunk, batchIndex) =>
+          processChunk(token, TEXT_MODEL, chunk, data.fileName, i + batchStart + batchIndex, chunks.length)
+        );
+
+        const batchResults = await Promise.all(batchPromises);
+
+        for (const result of batchResults) {
+          if (result.ok) {
+            allResults.push(...result.rows);
+          } else {
+            console.error(`[extract] Parallel chunk failed: ${result.error}`);
+            // Continue with other chunks
+          }
+        }
+
+        // Small delay between batches
+        if (batchEnd < remainingChunks.length) {
+          console.log(`[extract] Waiting ${CHUNK_DELAY_MS}ms before next parallel batch...`);
+          await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
+        }
       }
     }
 
@@ -327,8 +392,9 @@ export const extractFromText = createServerFn({ method: "POST" })
       return { ok: false as const, error: "Failed to extract data from any chunk." };
     }
 
-    console.log(`[extract] Successfully processed all ${chunks.length} chunk(s), extracted ${allResults.length} total invoice(s)`);
-    
+    elapsedTime = Date.now() - startTime;
+    console.log(`[extract] Successfully processed all ${chunks.length} chunk(s) in ${elapsedTime}ms, extracted ${allResults.length} total invoice(s)`);
+
     // Return single row if only one, or rows array if multiple
     if (allResults.length === 1) {
       return { ok: true as const, row: allResults[0] };
