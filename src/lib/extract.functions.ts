@@ -12,13 +12,14 @@ const TEXT_MODEL = "gpt-4o-mini";              // max 16,384 tokens output
 const VISION_MODEL = "gpt-4o";                 // max 16,384 tokens output
 const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
-const MAX_COMPLETION_TOKENS = 16384;           // Model's actual limit
+const MAX_COMPLETION_TOKENS = 4000;            // GitHub Models free tier hard cap: 4000 output tokens/request
 
-// Safe limits to avoid hitting token limits
-// Estimate input tokens conservatively (1 token ≈ 4 chars)
-// Reserve budget for response, use ~60% of input budget
-const SAFE_REQUEST_SIZE = 50_000;  // ~12.5K tokens input (conservative)
+// Safe limits to stay under GitHub Models free tier: 8000 input tokens + 4000 output tokens per request.
+// Estimate input tokens conservatively (1 token ≈ 4 chars).
+// Budget per chunk: ~5.5K tokens text + ~0.5K prompt = ~6K < 8K input limit (safe headroom).
+const SAFE_REQUEST_SIZE = 22_000;  // ~5.5K input tokens — stays under the 8000-token/request limit
 const CHUNK_OVERLAP = 2_000;  // Character overlap between chunks for context continuity
+const CHUNK_DELAY_MS = 4_500;  // ~13 req/min — stays under the GitHub free tier 15 req/min limit
 
 // ── Error handling helper ────────────────────────────────────────────────────
 function extractErrorMessage(error: any): string {
@@ -239,6 +240,10 @@ async function runWithRetry(
         await new Promise((r) => setTimeout(r, 10_000 * attempt));
         continue;
       }
+      if (status === 413) {
+        // Request exceeded the 8000 input / 4000 output token-per-request limit.
+        return { ok: false, error: "A document chunk exceeded GitHub Models' 8000-token request limit. The file may contain unusually dense pages." };
+      }
       if (status === 401 || status === 403) {
         return { ok: false, error: "GitHub Models authentication failed — check your GITHUB_TOKEN in Vercel." };
       }
@@ -367,9 +372,9 @@ ${USER_SUFFIX}`;
     
     console.log(`[extract] Chunk ${chunk.chunkNum}/${chunk.totalChunks} completed successfully`);
 
-    // Add small delay between chunks to respect rate limits
+    // Pace requests to respect the GitHub free tier rate limit (15 req/min)
     if (chunk.chunkNum < chunk.totalChunks) {
-      await new Promise((r) => setTimeout(r, 800));
+      await new Promise((r) => setTimeout(r, CHUNK_DELAY_MS));
     }
   }
 
