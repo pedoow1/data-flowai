@@ -13,8 +13,8 @@ const VISION_MODEL = "gpt-4o";         // Best vision model
 const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
 const MAX_TOKENS = 8000;   // 8000 tokens max for output (GitHub Models limit)
-const CHUNK_SIZE = 20000;    // 8K chars per chunk for faster processing
-const PARALLEL_LIMIT = 6;  // Process max 2 chunks in parallel
+const CHUNK_SIZE = 30000;    // 8K chars per chunk for faster processing
+const PARALLEL_LIMIT = 4;  // Process max 2 chunks in parallel
 const BATCH_DELAY_MS = 0;  // 300ms delay between parallel batches
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
