@@ -12,7 +12,7 @@ const TEXT_MODEL = "Mistral-medium-2505";      // 128K tokens context
 const VISION_MODEL = "Phi-4-reasoning";         // Best vision model
 const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
-const MAX_TOKENS = 128000;  // Full context window for both models
+const MAX_TOKENS = 16384;   // Max output tokens for these models
 const CHUNK_SIZE = 20000;   // 20K chars per chunk to avoid memory issues and request size limits
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
