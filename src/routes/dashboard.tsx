@@ -266,7 +266,7 @@ function Dashboard() {
                     {scanning ? (
                       <ScanningSkeleton count={1} />
                     ) : rows.length > 0 ? (
-                      <AuditTable rows={rows} setRows={setRows} onExport={(f) => onExport(f, rows)} locked={false} />
+                      <AuditTable rows={rows} setRows={setRows} onExport={(f) => onExport(f, rows)} locked={false} plan={usage.plan} />
                     ) : (
                       <div className="glass rounded-2xl h-[480px] lg:h-[640px] flex flex-col items-center justify-center text-center p-8">
                         <Sparkles className="h-10 w-10 text-muted-foreground mb-3" />
@@ -284,7 +284,7 @@ function Dashboard() {
             )}
 
             {tab === "history" && (
-              <HistoryView history={history} onClear={clearHistory} onExport={(f) => onExport(f, history)} />
+              <HistoryView history={history} onClear={clearHistory} onExport={(f) => onExport(f, history)} plan={usage.plan} />
             )}
 
             {tab === "settings" && (
@@ -375,8 +375,8 @@ function Sidebar({ usage, onUpgrade, tab, setTab, isAdmin }: {
   );
 }
 
-function HistoryView({ history, onClear, onExport }: {
-  history: ExtractedRow[]; onClear: () => void; onExport: (f: "json" | "csv" | "xlsx") => void;
+function HistoryView({ history, onClear, onExport, plan }: {
+  history: ExtractedRow[]; onClear: () => void; onExport: (f: "json" | "csv" | "xlsx") => void; plan: "free" | "pro" | "team";
 }) {
   return (
     <>
@@ -397,7 +397,7 @@ function HistoryView({ history, onClear, onExport }: {
           <p className="text-sm text-muted-foreground">No extractions yet. Process a document to populate your history.</p>
         </div>
       ) : (
-        <AuditTable rows={history} setRows={() => {}} onExport={onExport} locked={false} />
+        <AuditTable rows={history} setRows={() => {}} onExport={onExport} locked={false} plan={plan} />
       )}
     </>
   );
