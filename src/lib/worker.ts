@@ -2,9 +2,9 @@ import { extractionQueue, updateJobProgress, completeExtractionJob, failExtracti
 import { extractFromText, extractFromImage } from "./extract.functions";
 import { chunkText } from "./extract.functions";
 
-const CHUNK_SIZE = 8000;
-const PARALLEL_LIMIT = 2;
-const BATCH_DELAY_MS = 300;
+const CHUNK_SIZE = 20000;
+const PARALLEL_LIMIT = 6;
+const BATCH_DELAY_MS = 0;
 
 // ── Chunking helper ────────────────────────────────────────────────────────
 function chunkText(text: string, chunkSize: number): string[] {
