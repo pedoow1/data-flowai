@@ -38,6 +38,9 @@ export const RowSchema = z.object({
   total:         CellSchema,
 });
 
+// Multi-row schema for extracting multiple invoices at once
+export const MultiRowSchema = z.array(RowSchema);
+
 const TextInputSchema = z.object({
   text:     z.string().min(1).max(5_000_000),
   fileName: z.string().min(1).max(255),
@@ -87,7 +90,91 @@ If field missing: {v: "—", c: 0}
 
 Return ONLY valid JSON object, no explanation.`;
 
+const MULTI_INVOICE_PROMPT = `You are an invoice data extraction engine. This document may contain MULTIPLE SEPARATE INVOICES.
+Extract ALL invoices found. For each invoice, extract: invoiceNumber, client, date, amount, tax, total.
+Each field should have: {v: "exact value", c: confidence 0-100}. If field missing: {v: "—", c: 0}
+
+IMPORTANT: Return a JSON ARRAY of invoice objects, even if there's only one invoice.
+Example format: [{invoiceNumber: {...}, client: {...}, ...}, {...}, ...]
+
+Return ONLY valid JSON array, no explanation.`;
+
 const USER_SUFFIX = `\n\nIMPORTANT: Do not truncate any text, numbers, or company names. Copy every value exactly as it appears in the document, character by character.`;
+
+// ── Invoice boundary detection ──────────────────────────────────────────────
+/**
+ * Detect potential invoice boundaries in text using common patterns
+ * Returns array of {start, end, invoiceNumber} objects
+ */
+function detectInvoiceBoundaries(text: string): Array<{ start: number; end: number; invoiceNumber?: string }> {
+  const boundaries: Array<{ start: number; end: number; invoiceNumber?: string }> = [];
+  
+  // Regex patterns for common invoice markers
+  const invoicePatterns = [
+    /(?:^|\n)\s*(?:Invoice|INVOICE|invoice|Receipt|RECEIPT|receipt|Bill|BILL|bill)\s*[#:]\s*(\S+)/gm,
+    /(?:^|\n)\s*(?:INV|inv|REC|rec)\s*[-:]?\s*(\S+)/gm,
+    /Invoice\s+(?:No\.?|Number|#)\s*(\S+)/gm,
+  ];
+
+  const matches: Array<{ pos: number; number?: string }> = [];
+
+  for (const pattern of invoicePatterns) {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      matches.push({
+        pos: match.index,
+        number: match[1]?.trim(),
+      });
+    }
+  }
+
+  // Sort by position
+  matches.sort((a, b) => a.pos - b.pos);
+
+  // Remove duplicates (keep earliest match in a range)
+  const uniqueMatches = [];
+  for (const match of matches) {
+    if (!uniqueMatches.some((m) => Math.abs(m.pos - match.pos) < 200)) {
+      uniqueMatches.push(match);
+    }
+  }
+
+  // Create boundaries based on detected invoice headers
+  for (let i = 0; i < uniqueMatches.length; i++) {
+    const start = uniqueMatches[i].pos;
+    const end = uniqueMatches[i + 1]?.pos || text.length;
+    boundaries.push({
+      start,
+      end,
+      invoiceNumber: uniqueMatches[i].number,
+    });
+  }
+
+  return boundaries.length > 0 ? boundaries : [{ start: 0, end: text.length }];
+}
+
+/**
+ * Split text into individual invoice chunks based on detected boundaries
+ */
+function splitByInvoices(text: string, maxChunkSize: number = CHUNK_SIZE): string[] {
+  const boundaries = detectInvoiceBoundaries(text);
+  const invoices: string[] = [];
+
+  for (const boundary of boundaries) {
+    const invoiceText = text.slice(boundary.start, boundary.end).trim();
+    
+    // If single invoice chunk fits in limit, use as-is
+    if (invoiceText.length <= maxChunkSize) {
+      invoices.push(invoiceText);
+    } else {
+      // Further split large invoices into chunks
+      const chunks = chunkText(invoiceText, maxChunkSize);
+      invoices.push(...chunks);
+    }
+  }
+
+  return invoices.length > 0 ? invoices : [text];
+}
 
 // ── GitHub Models API helper ─────────────────────────────────────────────────
 async function callGitHubModels(
@@ -119,7 +206,7 @@ async function callGitHubModels(
   }
 }
 
-// ── Response parser for GitHub Models ─────────────────────────────────────────
+// ── Response parser for single row ────────────────────────────────────────────
 function parseGitHubResponse(
   status: number,
   bodyText: string,
@@ -153,7 +240,41 @@ function parseGitHubResponse(
   return { ok: true, row: validated.data };
 }
 
-// ── Retry wrapper for GitHub Models ──────────────────────────��───────────────
+// ── Response parser for multiple rows ─────────────────────────────────────────
+function parseMultiRowResponse(
+  status: number,
+  bodyText: string,
+  model: string,
+): { ok: true; rows: z.infer<typeof MultiRowSchema> } | { ok: false; error: string } | null {
+  if (status !== 200) return null;
+
+  let json: any;
+  try { json = JSON.parse(bodyText); }
+  catch { return { ok: false, error: "GitHub Models returned invalid JSON." }; }
+
+  const content: string = json?.choices?.[0]?.message?.content ?? "";
+  if (!content) {
+    return { ok: false, error: "GitHub Models returned empty response." };
+  }
+
+  const cleaned = content.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
+
+  let parsed: unknown;
+  try { parsed = JSON.parse(cleaned); }
+  catch {
+    console.error(`[extract/${model}] unparseable multi-row content:`, content.slice(0, 300));
+    return { ok: false, error: "AI returned an unparseable response. Please retry." };
+  }
+
+  const validated = MultiRowSchema.safeParse(parsed);
+  if (!validated.success) {
+    console.error(`[extract/${model}] multi-row schema mismatch:`, JSON.stringify(validated.error.issues).slice(0, 300));
+    return { ok: false, error: "AI response missing required fields. Please retry." };
+  }
+  return { ok: true, rows: validated.data };
+}
+
+// ── Retry wrapper for single row ────────────────────────────────────────────
 async function runWithRetry(
   token: string,
   model: string,
@@ -206,7 +327,60 @@ async function runWithRetry(
   return { ok: false, error: `${lastError} Please try again.` };
 }
 
-// ── Chunking helper ────────────────────────────────────────────────────────
+// ── Retry wrapper for multiple rows ────────────────────────────────────────
+async function runWithRetryMulti(
+  token: string,
+  model: string,
+  messages: any[],
+): Promise<{ ok: true; rows: z.infer<typeof MultiRowSchema> } | { ok: false; error: string }> {
+  let lastError = "Unknown error";
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const { status, bodyText } = await callGitHubModels(token, model, messages);
+
+      if (status === 200) {
+        const result = parseMultiRowResponse(status, bodyText, model);
+        return result ?? { ok: false, error: "Failed to parse multi-row response." };
+      }
+
+      console.error(`[extract/${model}] multi-row GitHub ${status}:`, bodyText.slice(0, 400));
+
+      if (status === 503 || status === 502 || status === 524) {
+        lastError = "GitHub Models is temporarily unavailable.";
+        await new Promise((r) => setTimeout(r, 5_000 * attempt));
+        continue;
+      }
+      if (status === 429) {
+        lastError = "GitHub Models rate limit reached.";
+        await new Promise((r) => setTimeout(r, 10_000 * attempt));
+        continue;
+      }
+      if (status === 401 || status === 403) {
+        return { ok: false, error: "GitHub Models authentication failed — check your GITHUB_TOKEN in Vercel." };
+      }
+      if (status === 404) {
+        return { ok: false, error: `GitHub model not found: ${model}.` };
+      }
+      try {
+        const parsed = JSON.parse(bodyText);
+        const msg = parsed?.error?.message || parsed?.message;
+        if (msg) return { ok: false, error: `GitHub: ${msg}` };
+      } catch { /* plain text body */ }
+      return { ok: false, error: `GitHub error (${status}): ${bodyText.slice(0, 200)}` };
+    } catch (e: any) {
+      const isAbort = e?.name === "AbortError";
+      lastError = isAbort ? "Extraction timed out." : (e?.message ?? "Network error");
+      console.error(`[extract/${model}] multi-row fetch failed:`, lastError);
+      if (isAbort) break;
+      await new Promise((r) => setTimeout(r, 2_000));
+    }
+  }
+
+  return { ok: false, error: `${lastError} Please try again.` };
+}
+
+// ── Chunking helper ─────────────────────────────────────────────────���──────
 function chunkText(text: string, chunkSize: number): string[] {
   const chunks: string[] = [];
   for (let i = 0; i < text.length; i += chunkSize) {
@@ -215,7 +389,7 @@ function chunkText(text: string, chunkSize: number): string[] {
   return chunks.length > 0 ? chunks : [""];
 }
 
-// ── Merge results from multiple chunks ──────────────────────────��────────────
+// ── Merge results from multiple chunks ───────────────────────────────────────
 // Takes highest confidence for each field across all chunks
 function mergeResults(results: Array<z.infer<typeof RowSchema>>): z.infer<typeof RowSchema> {
   const merged: z.infer<typeof RowSchema> = {
@@ -259,23 +433,50 @@ export const extractFromText = createServerFn({ method: "POST" })
       return { ok: false as const, error: "__NEEDS_VISION__" };
     }
 
-    // Split into 8K char chunks for faster processing
-    const chunks = chunkText(data.text, CHUNK_SIZE);
-    console.log(`[extract] Processing ${chunks.length} chunk(s) for: ${data.fileName}`);
+    // Detect if document contains multiple invoices
+    const invoices = splitByInvoices(data.text);
+    const isMultiInvoice = invoices.length > 1;
 
+    console.log(`[extract] Detected ${invoices.length} invoice(s) in: ${data.fileName}`);
+
+    // ── Multi-invoice batch processing (if detected)
+    if (isMultiInvoice && invoices.length <= 5) {
+      // For moderate multi-invoice documents, try batch extraction first
+      const batchText = invoices.slice(0, 5).join("\n\n---\n\n");
+      
+      if (batchText.length <= CHUNK_SIZE * 2) {
+        console.log(`[extract] Attempting batch multi-invoice extraction for ${invoices.length} invoices...`);
+        
+        const messages = [
+          {
+            role: "user",
+            content: `${MULTI_INVOICE_PROMPT}\n\nDocument: ${data.fileName}\n\n---\n${batchText}${USER_SUFFIX}`,
+          },
+        ];
+
+        const batchResult = await runWithRetryMulti(token, TEXT_MODEL, messages);
+        if (batchResult.ok && batchResult.rows.length > 0) {
+          console.log(`[extract] Successfully extracted ${batchResult.rows.length} invoices in batch mode`);
+          return { ok: true as const, rows: batchResult.rows };
+        } else {
+          console.log(`[extract] Batch mode failed (${batchResult.error}), falling back to sequential...`);
+        }
+      }
+    }
+
+    // ── Sequential processing (fallback or for large multi-invoice docs)
     const results: Array<z.infer<typeof RowSchema>> = [];
 
-    // Process each chunk sequentially with minimal prompt to save tokens
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      console.log(`[extract] Processing chunk ${i + 1}/${chunks.length} (${chunk.length} chars)`);
+    for (let i = 0; i < invoices.length; i++) {
+      const invoice = invoices[i];
+      console.log(`[extract] Processing invoice ${i + 1}/${invoices.length} (${invoice.length} chars)`);
 
-      const chunkPrompt = `${MINIMAL_PROMPT}\n\nDocument: ${data.fileName}\nPart ${i + 1}/${chunks.length}\n\n---\n${chunk}${USER_SUFFIX}`;
+      const prompt = `${MINIMAL_PROMPT}\n\nDocument: ${data.fileName}\nInvoice ${i + 1}/${invoices.length}\n\n---\n${invoice}${USER_SUFFIX}`;
 
       const messages = [
         {
           role: "user",
-          content: chunkPrompt,
+          content: prompt,
         },
       ];
 
@@ -284,30 +485,33 @@ export const extractFromText = createServerFn({ method: "POST" })
       if (result.ok) {
         results.push(result.row);
       } else {
-        // If any chunk fails significantly, return error
-        console.error(`[extract] Chunk ${i + 1} failed: ${result.error}`);
+        console.error(`[extract] Invoice ${i + 1} failed: ${result.error}`);
         if (i === 0) {
-          // First chunk is critical
+          // First invoice is critical
           return { ok: false as const, error: result.error };
         }
-        // For subsequent chunks, continue with what we have
+        // For subsequent invoices, continue with what we have
       }
 
-      // Delay between chunks to respect Vercel timeout (except after last chunk)
-      if (i < chunks.length - 1) {
-        console.log(`[extract] Waiting ${CHUNK_DELAY_MS}ms before next chunk...`);
+      // Delay between invoices to respect Vercel timeout
+      if (i < invoices.length - 1) {
+        console.log(`[extract] Waiting ${CHUNK_DELAY_MS}ms before next invoice...`);
         await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
       }
     }
 
     if (results.length === 0) {
-      return { ok: false as const, error: "Failed to extract data from any chunk." };
+      return { ok: false as const, error: "Failed to extract data from any invoice." };
     }
 
-    // Merge results from all chunks - use highest confidence for each field
-    const merged = mergeResults(results);
-    console.log(`[extract] Successfully processed all ${chunks.length} chunk(s)`);
-    return { ok: true as const, row: merged };
+    console.log(`[extract] Successfully processed ${results.length} invoice(s)`);
+    
+    // Return single row if only one, or rows array if multiple
+    if (results.length === 1) {
+      return { ok: true as const, row: results[0] };
+    } else {
+      return { ok: true as const, rows: results };
+    }
   });
 
 // ── Server function: vision extraction (gpt-4o) ────
