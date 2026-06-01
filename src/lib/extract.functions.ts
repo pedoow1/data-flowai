@@ -14,7 +14,7 @@ const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
 const MAX_TOKENS = 8000;   // 8000 tokens max for output (GitHub Models limit)
 const CHUNK_SIZE = 8000;    // 8K chars per chunk for faster processing
-const CHUNK_DELAY_MS = 2000;  // 2 second delay between chunks to respect Vercel timeout
+const CHUNK_DELAY_MS = 1000;  // 1 second delay between chunks to respect Vercel timeout
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
   const isAdminEmail =
@@ -193,7 +193,7 @@ async function runWithRetry(
   return { ok: false, error: `${lastError} Please try again.` };
 }
 
-// ── Chunking helper ─���────────────────────────────────────────────────────────
+// ── Chunking helper ──────────────────────────────────────────────────────────
 function chunkText(text: string, chunkSize: number): string[] {
   const chunks: string[] = [];
   for (let i = 0; i < text.length; i += chunkSize) {
