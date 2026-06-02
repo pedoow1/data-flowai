@@ -1,14 +1,19 @@
-import type { ExtractedRow } from "@/components/AuditTable";
+import type { ExtractedRow } from "@/lib/flexible-schema";
 
 function sanitize(s: string) { return s.replace(/[^a-z0-9-_]+/gi, "_").slice(0, 60); }
 
 export function autoName(rows: ExtractedRow[], ext: string) {
   if (rows.length === 1) {
     const r = rows[0];
-    const base = r.invoiceNumber?.v || r.client?.v || "dataflow_export";
+    const invoiceNum = r.invoiceNumber?.v;
+    const clientName = r.client?.v;
+    const base = invoiceNum || clientName || "dataflow_export";
     return `${sanitize(base)}.${ext}`;
   }
-  const clients = Array.from(new Set(rows.map(r => r.client?.v).filter(Boolean)));
+  const clients = Array.from(new Set(rows.map(r => {
+    const client = r.client?.v;
+    return typeof client === "string" ? client : undefined;
+  }).filter(Boolean)));
   const base = clients.length === 1 ? `${clients[0]}_${rows.length}_invoices` : `dataflow_batch_${rows.length}`;
   return `${sanitize(base)}.${ext}`;
 }
@@ -20,15 +25,18 @@ function download(name: string, blob: Blob) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-const flatten = (rows: ExtractedRow[]) => rows.map(r => ({
-  file: r.fileName,
-  invoice_number: r.invoiceNumber.v,
-  client: r.client.v,
-  date: r.date.v,
-  amount: r.amount.v,
-  tax: r.tax.v,
-  total: r.total.v,
-}));
+const flatten = (rows: ExtractedRow[]) => rows.map(r => {
+  const flattened: Record<string, any> = { file: r.fileName };
+  
+  // Flatten all cell values (skip id and fileName)
+  for (const [key, val] of Object.entries(r)) {
+    if (key !== "id" && key !== "fileName" && typeof val === "object" && val !== null && "v" in val) {
+      flattened[key] = val.v;
+    }
+  }
+  
+  return flattened;
+});
 
 export function exportJSON(rows: ExtractedRow[]) {
   download(autoName(rows, "json"), new Blob([JSON.stringify(flatten(rows), null, 2)], { type: "application/json" }));
@@ -36,8 +44,15 @@ export function exportJSON(rows: ExtractedRow[]) {
 
 export function exportCSV(rows: ExtractedRow[]) {
   const data = flatten(rows);
+  if (data.length === 0) return;
+  
   const headers = Object.keys(data[0]);
-  const csv = [headers.join(","), ...data.map(r => headers.map(h => `"${String(r[h as keyof typeof r]).replace(/"/g, '\"\"')}"`).join(","))].join("\n");
+  const csv = [
+    headers.join(","),
+    ...data.map(r =>
+      headers.map(h => `"${String(r[h] || "").replace(/"/g, '""')}"`).join(",")
+    ),
+  ].join("\n");
   download(autoName(rows, "csv"), new Blob([csv], { type: "text/csv" }));
 }
 
@@ -57,11 +72,11 @@ export type ExportFormat = "json" | "csv" | "xlsx";
 export function getAvailableExportFormats(plan: "free" | "pro" | "team"): ExportFormat[] {
   switch (plan) {
     case "free":
-      return ["xlsx"]; // Free: Excel only
+      return ["xlsx"];
     case "pro":
-      return ["csv", "xlsx"]; // Pro: CSV + Excel
+      return ["csv", "xlsx"];
     case "team":
-      return ["json", "csv", "xlsx"]; // Team: All formats
+      return ["json", "csv", "xlsx"];
   }
 }
 
