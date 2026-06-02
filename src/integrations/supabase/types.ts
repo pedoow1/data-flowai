@@ -14,6 +14,57 @@ export type Database = {
   }
   public: {
     Tables: {
+      jobs: {
+        Row: {
+          attempts: number
+          completed_at: string | null
+          created_at: string
+          error: string | null
+          file_name: string | null
+          id: string
+          input: Json
+          max_attempts: number
+          output: Json | null
+          started_at: string | null
+          status: Database["public"]["Enums"]["job_status"]
+          type: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          attempts?: number
+          completed_at?: string | null
+          created_at?: string
+          error?: string | null
+          file_name?: string | null
+          id?: string
+          input: Json
+          max_attempts?: number
+          output?: Json | null
+          started_at?: string | null
+          status?: Database["public"]["Enums"]["job_status"]
+          type?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          attempts?: number
+          completed_at?: string | null
+          created_at?: string
+          error?: string | null
+          file_name?: string | null
+          id?: string
+          input?: Json
+          max_attempts?: number
+          output?: Json | null
+          started_at?: string | null
+          status?: Database["public"]["Enums"]["job_status"]
+          type?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       pending_subscriptions: {
         Row: {
           created_at: string
@@ -182,6 +233,7 @@ export type Database = {
     }
     Enums: {
       app_role: "admin" | "user"
+      job_status: "pending" | "processing" | "completed" | "failed"
       plan_tier: "free" | "pro" | "team"
     }
     CompositeTypes: {
@@ -311,6 +363,7 @@ export const Constants = {
   public: {
     Enums: {
       app_role: ["admin", "user"],
+      job_status: ["pending", "processing", "completed", "failed"],
       plan_tier: ["free", "pro", "team"],
     },
   },
