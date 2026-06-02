@@ -22,31 +22,40 @@ const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
 });
 
 type Cell = { v: string; c: number };
-type Row = {
-  invoiceNumber: Cell;
-  client: Cell;
-  date: Cell;
-  amount: Cell;
-  tax: Cell;
-  total: Cell;
-};
+type FlexibleRow = Record<string, Cell>;
 
-const MINIMAL_PROMPT = `You are an invoice data extraction engine. Extract these 6 fields from the document:
-- invoiceNumber (invoice/receipt number)
-- client (customer/buyer name)
-- date (invoice date, use YYYY-MM-DD if possible)
-- amount (subtotal before tax, with currency)
-- tax (tax/VAT amount, with currency, or "—" if absent)
-- total (grand total with tax, with currency)
+// ── FLEXIBLE PROMPT: Extract ALL fields, not just 6 hardcoded ones ───────────
+const FLEXIBLE_PROMPT = `You are a precision invoice and document data extraction engine.
 
-For each field, provide: {v: "exact value from document", c: confidence 0-100}
-If field missing: {v: "—", c: 0}
+Your task: Extract ALL structured fields from the document and return ONLY valid JSON.
 
-IMPORTANT: If this chunk contains MULTIPLE invoices, extract ALL of them and return a JSON ARRAY.
-Otherwise return a single JSON object.
-Return ONLY valid JSON, no explanation.`;
+For each invoice found, return an object with these fields (include as many as are present):
+- invoiceNumber: the invoice/receipt/order/transaction number
+- client OR vendor OR billTo OR seller: the company/person name
+- date OR invoiceDate: the date (ISO YYYY-MM-DD if possible)
+- amount OR subtotal OR netAmount: subtotal before tax
+- tax OR vat OR gst: tax amount (or "—" if absent)
+- total OR grandTotal: final amount with tax
+- dueDate (if present)
+- reference OR poNumber OR orderNumber (if present)
+- description OR items (if present)
+- paymentTerms (if present)
+- notes (if present)
 
-const USER_SUFFIX = `\n\nIMPORTANT: Do not truncate any text, numbers, or company names. Copy every value exactly as it appears in the document, character by character.`;
+For EACH field:
+- "v": the EXACT value from the document (never truncate, abbreviate, or paraphrase)
+- "c": confidence score 0-100
+
+If a field is missing: don't include it (don't use "—" as placeholder unless it explicitly appears).
+
+CRITICAL RULES:
+- Extract ALL invoices in the document (return JSON ARRAY if multiple, single OBJECT if one)
+- Never lose data due to missing fields
+- Copy numbers/dates/company names EXACTLY as they appear
+- If this chunk has multiple invoices, extract ALL
+- Return ONLY valid JSON, no prose, no markdown, no code fences`;
+
+const USER_SUFFIX = `\n\nIMPORTANT: Do not truncate any text, numbers, or company names. Copy every value exactly as it appears in the document, character by character. Extract ALL invoices present, even if some fields are missing.`;
 
 // ── GitHub Models API call ───────────────────────────────────────────────
 async function callGitHubModels(model: string, messages: unknown[]): Promise<{ status: number; bodyText: string }> {
@@ -71,13 +80,16 @@ async function callGitHubModels(model: string, messages: unknown[]): Promise<{ s
 function isValidCell(x: unknown): x is Cell {
   return !!x && typeof x === "object" && typeof (x as Cell).v === "string" && typeof (x as Cell).c === "number";
 }
-function isValidRow(x: unknown): x is Row {
+
+function isValidRow(x: unknown): x is FlexibleRow {
   if (!x || typeof x !== "object") return false;
   const r = x as Record<string, unknown>;
-  return ["invoiceNumber", "client", "date", "amount", "tax", "total"].every((k) => isValidCell(r[k]));
+  // Row is valid if it has AT LEAST ONE valid cell (flexible schema)
+  const values = Object.values(r);
+  return values.length > 0 && values.some(isValidCell);
 }
 
-function parseResponse(status: number, bodyText: string): { ok: true; rows: Row[] } | { ok: false; error: string } | null {
+function parseResponse(status: number, bodyText: string): { ok: true; rows: FlexibleRow[] } | { ok: false; error: string } | null {
   if (status !== 200) return null;
   let json: any;
   try { json = JSON.parse(bodyText); } catch { return { ok: false, error: "GitHub Models returned invalid JSON." }; }
@@ -86,13 +98,16 @@ function parseResponse(status: number, bodyText: string): { ok: true; rows: Row[
   const cleaned = content.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
   let parsed: unknown;
   try { parsed = JSON.parse(cleaned); } catch { return { ok: false, error: "AI returned an unparseable response." }; }
+  
+  // Handle both single object and array
   const arr = Array.isArray(parsed) ? parsed : [parsed];
-  const rows = arr.filter(isValidRow) as Row[];
-  if (rows.length === 0) return { ok: false, error: "AI response missing required fields." };
+  const rows = arr.filter(isValidRow) as FlexibleRow[];
+  
+  if (rows.length === 0) return { ok: false, error: "AI response missing data. Please retry." };
   return { ok: true, rows };
 }
 
-async function runWithRetry(model: string, messages: unknown[]): Promise<{ ok: true; rows: Row[] } | { ok: false; error: string }> {
+async function runWithRetry(model: string, messages: unknown[]): Promise<{ ok: true; rows: FlexibleRow[] } | { ok: false; error: string }> {
   let lastError = "Unknown error";
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -131,15 +146,15 @@ function chunkText(text: string, size: number): string[] {
   return chunks.length > 0 ? chunks : [""];
 }
 
-async function extractFromText(text: string, fileName: string): Promise<{ ok: true; rows: Row[] } | { ok: false; error: string }> {
+async function extractFromText(text: string, fileName: string): Promise<{ ok: true; rows: FlexibleRow[] } | { ok: false; error: string }> {
   const chunks = chunkText(text, CHUNK_SIZE);
-  const allRows: Row[] = [];
+  const allRows: FlexibleRow[] = [];
   for (let start = 0; start < chunks.length; start += PARALLEL_LIMIT) {
     const end = Math.min(start + PARALLEL_LIMIT, chunks.length);
     const batch = chunks.slice(start, end);
     const results = await Promise.all(
       batch.map((chunk, i) => {
-        const prompt = `${MINIMAL_PROMPT}\n\nDocument: ${fileName}\nPart ${start + i + 1}/${chunks.length}\n\n---\n${chunk}${USER_SUFFIX}`;
+        const prompt = `${FLEXIBLE_PROMPT}\n\nDocument: ${fileName}\nPart ${start + i + 1}/${chunks.length}\n\n---\n${chunk}${USER_SUFFIX}`;
         return runWithRetry(TEXT_MODEL, [{ role: "user", content: prompt }]);
       }),
     );
@@ -154,13 +169,13 @@ async function extractFromText(text: string, fileName: string): Promise<{ ok: tr
   return { ok: true, rows: allRows };
 }
 
-async function extractFromImage(imageDataUrl: string, fileName: string): Promise<{ ok: true; rows: Row[] } | { ok: false; error: string }> {
+async function extractFromImage(imageDataUrl: string, fileName: string): Promise<{ ok: true; rows: FlexibleRow[] } | { ok: false; error: string }> {
   const messages = [
     {
       role: "user",
       content: [
         { type: "image_url", image_url: { url: imageDataUrl } },
-        { type: "text", text: `${MINIMAL_PROMPT}\n\nDocument filename: ${fileName}\n\nExtract data from this document image. Return ONLY the JSON object or array if multiple invoices.${USER_SUFFIX}` },
+        { type: "text", text: `${FLEXIBLE_PROMPT}\n\nDocument filename: ${fileName}\n\nExtract ALL fields from this document image.${USER_SUFFIX}` },
       ],
     },
   ];
@@ -176,7 +191,7 @@ async function processJob(jobId: string) {
 
     const input = job.input as { kind: "text" | "image"; text?: string; imageDataUrl?: string; fileName: string };
 
-    let result: { ok: true; rows: Row[] } | { ok: false; error: string };
+    let result: { ok: true; rows: FlexibleRow[] } | { ok: false; error: string };
     if (input.kind === "image") {
       if (!input.imageDataUrl) throw new Error("No image provided");
       result = await extractFromImage(input.imageDataUrl, input.fileName);
