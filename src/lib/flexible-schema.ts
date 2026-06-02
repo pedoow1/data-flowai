@@ -12,6 +12,12 @@ export type Cell = z.infer<typeof CellSchema>;
 export const FlexibleRowSchema = z.record(z.string(), CellSchema);
 export type FlexibleRow = z.infer<typeof FlexibleRowSchema>;
 
+// ── ExtractedRow: FlexibleRow + metadata (used in UI) ─────────────────────
+export type ExtractedRow = FlexibleRow & {
+  id: string;
+  fileName: string;
+};
+
 // ── Multi-row schema for batch extraction ──────────────────────────────────
 export const FlexibleMultiRowSchema = z.array(FlexibleRowSchema);
 
