@@ -3,19 +3,17 @@ import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { getPlanAndUsage } from "./usage.functions";
 import { ADMIN_EMAIL } from "./config";
+import { FlexibleRowSchema, FlexibleMultiRowSchema, normalizeRow } from "./flexible-schema";
 
 // ── API configuration ────────────────────────────────────────────────────────
-// GitHub Models API (Free tier from GitHub)
-// Text extraction: gpt-4o-mini (fast + accurate for text)
-// Vision extraction: gpt-4o (best vision understanding)
-const TEXT_MODEL = "gpt-4o-mini";      // Fast text extraction
-const VISION_MODEL = "gpt-4o";         // Best vision model
+const TEXT_MODEL = "gpt-4o-mini";
+const VISION_MODEL = "gpt-4o";
 const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
-const TIMEOUT_MS = 300_000;  // 5 minutes for large documents
-const MAX_TOKENS = 8000;   // 8000 tokens max for output (GitHub Models limit)
-const CHUNK_SIZE = 8000;    // 8K chars per chunk for faster processing
-const PARALLEL_LIMIT = 2;  // Process max 2 chunks in parallel
-const BATCH_DELAY_MS = 300;  // 300ms delay between parallel batches
+const TIMEOUT_MS = 300_000;
+const MAX_TOKENS = 8000;
+const CHUNK_SIZE = 8000;
+const PARALLEL_LIMIT = 2;
+const BATCH_DELAY_MS = 300;
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
   const isAdminEmail =
@@ -29,18 +27,8 @@ async function assertWithinQuota(context: { supabase: unknown; userId: string; c
 }
 
 // ── Shared schemas ─────────────────────────────────────────────────────────
-const CellSchema = z.object({ v: z.string(), c: z.number().min(0).max(100) });
-export const RowSchema = z.object({
-  invoiceNumber: CellSchema,
-  client:        CellSchema,
-  date:          CellSchema,
-  amount:        CellSchema,
-  tax:           CellSchema,
-  total:         CellSchema,
-});
-
-// Multi-row schema for extracting multiple invoices at once
-export const MultiRowSchema = z.array(RowSchema);
+export type FlexibleRow = z.infer<typeof FlexibleRowSchema>;
+export const MultiRowSchema = z.array(FlexibleRowSchema);
 
 const TextInputSchema = z.object({
   text:     z.string().min(1).max(5_000_000),
@@ -52,48 +40,38 @@ const ImageInputSchema = z.object({
   fileName:     z.string().min(1).max(255),
 });
 
-// ── System / user prompts ────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `You are a precise invoice and document data extraction engine.
+// ── FLEXIBLE PROMPT: Extract ALL fields, not just 6 hardcoded ones ───────────
+const FLEXIBLE_PROMPT = `You are a precision invoice and document data extraction engine.
 
-Your task: Extract structured fields from the document and return ONLY valid JSON matching this exact TypeScript type:
+Your task: Extract ALL structured fields from the document and return ONLY valid JSON.
 
-type Row = {
-  invoiceNumber: { v: string; c: number };
-  client:        { v: string; c: number };
-  date:          { v: string; c: number };
-  amount:        { v: string; c: number };
-  tax:           { v: string; c: number };
-  total:         { v: string; c: number };
-};
+For each invoice found, return an object with these fields (include as many as are present):
+- invoiceNumber: the invoice/receipt/order/transaction number
+- client OR vendor OR billTo OR seller: the company/person name
+- date OR invoiceDate: the date (ISO YYYY-MM-DD if possible)
+- amount OR subtotal OR netAmount: subtotal before tax
+- tax OR vat OR gst: tax amount (or "—" if absent)
+- total OR grandTotal: final amount with tax
+- dueDate (if present)
+- reference OR poNumber OR orderNumber (if present)
+- description OR items (if present)
+- paymentTerms (if present)
+- notes (if present)
 
-Extraction rules:
-- "v" is the FULL exact string value as it appears in the document. NEVER truncate, shorten, abbreviate, or paraphrase any text, number, or company name.
-- "c" is your confidence score 0-100 for that field.
-- invoiceNumber: the invoice/receipt/order number (e.g. "INV-2024-00123").
-- client: the full legal name of the buyer/customer/bill-to party exactly as written.
-- date: the invoice date in ISO YYYY-MM-DD format when possible; otherwise copy the exact date string from the document.
-- amount: the subtotal/net amount before tax, including the currency symbol if present (e.g. "$1,250.00").
-- tax: the tax/VAT/GST amount including currency symbol if present; use "—" only if truly absent.
-- total: the grand total including tax, including the currency symbol if present.
-- If a field is genuinely not found in the document, set "v" to "—" and "c" to 0.
-- Output ONLY the raw JSON object. No prose, no markdown, no code fences, no explanation.`;
+For EACH field:
+- "v": the EXACT value from the document (never truncate, abbreviate, or paraphrase)
+- "c": confidence score 0-100
 
-const MINIMAL_PROMPT = `You are an invoice data extraction engine. Extract these 6 fields from the document:
-- invoiceNumber (invoice/receipt number)
-- client (customer/buyer name)
-- date (invoice date, use YYYY-MM-DD if possible)
-- amount (subtotal before tax, with currency)
-- tax (tax/VAT amount, with currency, or "—" if absent)
-- total (grand total with tax, with currency)
+If a field is missing: don't include it (don't use "—" as placeholder unless it explicitly appears).
 
-For each field, provide: {v: "exact value from document", c: confidence 0-100}
-If field missing: {v: "—", c: 0}
+CRITICAL RULES:
+- Extract ALL invoices in the document (return JSON ARRAY if multiple, single OBJECT if one)
+- Never lose data due to missing fields
+- Copy numbers/dates/company names EXACTLY as they appear
+- If this chunk has multiple invoices, extract ALL
+- Return ONLY valid JSON, no prose, no markdown, no code fences`;
 
-IMPORTANT: If this chunk contains MULTIPLE invoices, extract ALL of them and return a JSON ARRAY.
-Otherwise return a single JSON object.
-Return ONLY valid JSON, no explanation.`;
-
-const USER_SUFFIX = `\n\nIMPORTANT: Do not truncate any text, numbers, or company names. Copy every value exactly as it appears in the document, character by character.`;
+const USER_SUFFIX = `\n\nIMPORTANT: Do not truncate any text, numbers, or company names. Copy every value exactly as it appears in the document, character by character. Extract ALL invoices present, even if some fields are missing.`;
 
 // ── GitHub Models API helper ─────────────────────────────────────────────────
 async function callGitHubModels(
@@ -125,12 +103,12 @@ async function callGitHubModels(
   }
 }
 
-// ── Flexible response parser (handles both single row and array) ─────────────
+// ── Flexible response parser (accepts any valid row structure) ─────────────
 function parseFlexibleResponse(
   status: number,
   bodyText: string,
   model: string,
-): { ok: true; rows: Array<z.infer<typeof RowSchema>> } | { ok: false; error: string } | null {
+): { ok: true; rows: FlexibleRow[] } | { ok: false; error: string } | null {
   if (status !== 200) return null;
 
   let json: any;
@@ -152,35 +130,35 @@ function parseFlexibleResponse(
   }
 
   // Handle both single object and array
-  let rows: Array<z.infer<typeof RowSchema>> = [];
+  let rows: FlexibleRow[] = [];
 
   if (Array.isArray(parsed)) {
     // Response is already an array
     const validated = MultiRowSchema.safeParse(parsed);
     if (!validated.success) {
       console.error(`[extract/${model}] array schema mismatch:`, JSON.stringify(validated.error.issues).slice(0, 300));
-      return { ok: false, error: "AI response array missing required fields. Please retry." };
+      return { ok: false, error: "AI response array has invalid structure. Please retry." };
     }
-    rows = validated.data;
+    rows = validated.data.map(normalizeRow);
   } else {
     // Response is a single object, wrap it
-    const validated = RowSchema.safeParse(parsed);
+    const validated = FlexibleRowSchema.safeParse(parsed);
     if (!validated.success) {
       console.error(`[extract/${model}] schema mismatch:`, JSON.stringify(validated.error.issues).slice(0, 300));
-      return { ok: false, error: "AI response missing required fields. Please retry." };
+      return { ok: false, error: "AI response has invalid structure. Please retry." };
     }
-    rows = [validated.data];
+    rows = [normalizeRow(validated.data)];
   }
 
   return { ok: true, rows };
 }
 
-// ── Retry wrapper ──────────────────────────────────────────────────────────
+// ── Retry wrapper ─────────────────────────────────────────────────────────
 async function runWithRetry(
   token: string,
   model: string,
   messages: any[],
-): Promise<{ ok: true; rows: Array<z.infer<typeof RowSchema>> } | { ok: false; error: string }> {
+): Promise<{ ok: true; rows: FlexibleRow[] } | { ok: false; error: string }> {
   let lastError = "Unknown error";
 
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -245,10 +223,10 @@ async function processChunk(
   fileName: string,
   chunkIndex: number,
   totalChunks: number,
-): Promise<{ ok: true; rows: Array<z.infer<typeof RowSchema>> } | { ok: false; error: string }> {
+): Promise<{ ok: true; rows: FlexibleRow[] } | { ok: false; error: string }> {
   console.log(`[extract] Processing chunk ${chunkIndex + 1}/${totalChunks} (${chunk.length} chars)`);
 
-  const chunkPrompt = `${MINIMAL_PROMPT}\n\nDocument: ${fileName}\nPart ${chunkIndex + 1}/${totalChunks}\n\n---\n${chunk}${USER_SUFFIX}`;
+  const chunkPrompt = `${FLEXIBLE_PROMPT}\n\nDocument: ${fileName}\nPart ${chunkIndex + 1}/${totalChunks}\n\n---\n${chunk}${USER_SUFFIX}`;
 
   const messages = [
     {
@@ -261,8 +239,6 @@ async function processChunk(
 }
 
 // ── Server function: text extraction (gpt-4o-mini) ─────
-// Processes large documents with full parallel processing
-// All chunks processed in parallel batches to minimize execution time
 export const extractFromText = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => TextInputSchema.parse(d))
@@ -277,21 +253,18 @@ export const extractFromText = createServerFn({ method: "POST" })
       return { ok: false as const, error: "__NEEDS_VISION__" };
     }
 
-    // Split into 8K char chunks for faster processing
     const chunks = chunkText(data.text, CHUNK_SIZE);
     console.log(`[extract] Processing ${chunks.length} chunk(s) for: ${data.fileName} with parallel limit of ${PARALLEL_LIMIT}`);
 
-    const allResults: Array<z.infer<typeof RowSchema>> = [];
+    const allResults: FlexibleRow[] = [];
     const startTime = Date.now();
 
-    // ── Full parallel processing: process chunks in batches ──
     for (let batchStart = 0; batchStart < chunks.length; batchStart += PARALLEL_LIMIT) {
       const batchEnd = Math.min(batchStart + PARALLEL_LIMIT, chunks.length);
       const batchChunks = chunks.slice(batchStart, batchEnd);
 
       console.log(`[extract] Processing parallel batch: chunks ${batchStart + 1} to ${batchEnd}/${chunks.length}`);
 
-      // Process batch in parallel
       const batchPromises = batchChunks.map((chunk, batchIndex) =>
         processChunk(token, TEXT_MODEL, chunk, data.fileName, batchStart + batchIndex, chunks.length)
       );
@@ -306,14 +279,11 @@ export const extractFromText = createServerFn({ method: "POST" })
         } else {
           console.error(`[extract] Chunk ${batchStart + i + 1} failed: ${result.error}`);
           if (batchStart + i === 0) {
-            // First chunk is critical
             return { ok: false as const, error: result.error };
           }
-          // For subsequent chunks, continue with what we have
         }
       }
 
-      // Delay between batches (except after last batch)
       if (batchEnd < chunks.length) {
         console.log(`[extract] Waiting ${BATCH_DELAY_MS}ms before next parallel batch...`);
         await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
@@ -327,7 +297,6 @@ export const extractFromText = createServerFn({ method: "POST" })
     const elapsedTime = Date.now() - startTime;
     console.log(`[extract] Successfully processed all ${chunks.length} chunk(s) in ${elapsedTime}ms, extracted ${allResults.length} total invoice(s)`);
 
-    // Return single row if only one, or rows array if multiple
     if (allResults.length === 1) {
       return { ok: true as const, row: allResults[0] };
     } else {
@@ -358,7 +327,7 @@ export const extractFromImage = createServerFn({ method: "POST" })
           },
           {
             type: "text",
-            text: `${MINIMAL_PROMPT}\n\nDocument filename: ${data.fileName}\n\nExtract data from this document image. Return ONLY the JSON object or array if multiple invoices.${USER_SUFFIX}`,
+            text: `${FLEXIBLE_PROMPT}\n\nDocument filename: ${data.fileName}\n\nExtract data from this document image. Return ONLY the JSON object or array if multiple invoices.${USER_SUFFIX}`,
           },
         ],
       },
@@ -367,7 +336,6 @@ export const extractFromImage = createServerFn({ method: "POST" })
     const result = await runWithRetry(token, VISION_MODEL, messages);
     
     if (result.ok) {
-      // For images, typically single invoice
       if (result.rows.length === 1) {
         return { ok: true as const, row: result.rows[0] };
       } else {
