@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
-export const Route = createFileRoute("/about")(function About() {
+function AboutPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-8">
       <div className="max-w-4xl mx-auto">
@@ -66,4 +66,6 @@ export const Route = createFileRoute("/about")(function About() {
       </div>
     </div>
   );
-});
+}
+
+export const Route = createFileRoute("/about")({ component: AboutPage });

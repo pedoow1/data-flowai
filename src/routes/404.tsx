@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 
-export const Route = createFileRoute("/404")(function NotFound() {
+function NotFoundPage() {
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -22,4 +22,6 @@ export const Route = createFileRoute("/404")(function NotFound() {
       </div>
     </div>
   );
-});
+}
+
+export const Route = createFileRoute("/404")({ component: NotFoundPage });
