@@ -3,7 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { HelpCircle, Clock, AlertCircle, CheckCircle } from "lucide-react";
 
-export const Route = createFileRoute("/help")(function Help() {
+function HelpPage() {
   const faqs = [
     {
       question: "What file formats are supported?",
@@ -69,4 +69,6 @@ export const Route = createFileRoute("/help")(function Help() {
       </div>
     </div>
   );
-});
+}
+
+export const Route = createFileRoute("/help")({ component: HelpPage });

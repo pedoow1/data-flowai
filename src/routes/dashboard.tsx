@@ -10,7 +10,7 @@ import { UpgradeModal } from "@/components/UpgradeModal";
 import { PdfPreview } from "@/components/PdfPreview";
 import { HelpButton } from "@/components/HelpButton";
 import { useAuth } from "@/lib/auth";
-import { extractFromText, extractFromImage } from "@/lib/extract.functions";
+import { createExtractionJob, getJobStatus, type ExtractionRow } from "@/lib/jobs.functions";
 import { extractPdfText, pdfPageToImageDataUrl, imageFileToDataUrl } from "@/lib/pdf";
 import { getMyUsage, recordUpload, setAdminPlan } from "@/lib/usage.functions";
 import { exportJSON, exportCSV, exportXLSX } from "@/lib/exporters";
@@ -105,11 +105,42 @@ function Dashboard() {
   const [tab, setTab] = useState<Tab>("extract");
   const [usage, setUsage] = useState<Usage>({ plan: "free", used: 0, limit: 2, remaining: 2, unlimited: false });
   const [lastFile, setLastFile] = useState<File | null>(null);
-  const extract       = useServerFn(extractFromText);
-  const extractVision = useServerFn(extractFromImage);
+  const createJob     = useServerFn(createExtractionJob);
+  const pollJob       = useServerFn(getJobStatus);
   const fetchUsage    = useServerFn(getMyUsage);
   const logUpload     = useServerFn(recordUpload);
   const changePlan    = useServerFn(setAdminPlan);
+
+  // Creates a background extraction job and polls until it finishes.
+  // The heavy AI work runs in a Supabase Edge Function, so this never blocks
+  // a Vercel request long enough to time out.
+  const runJob = async (
+    input:
+      | { kind: "text"; text: string; fileName: string }
+      | { kind: "image"; imageDataUrl: string; fileName: string },
+  ): Promise<{ ok: false; error: string } | { ok: true; rows: ExtractionRow[] }> => {
+    const created = (await createJob({ data: input })) as { ok: boolean; jobId?: string; error?: string };
+    if (!created.ok || !created.jobId) {
+      return { ok: false, error: created.error || "Failed to start extraction." };
+    }
+    const jobId = created.jobId;
+    const deadline = Date.now() + 10 * 60 * 1000; // 10 min safety cap
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2000));
+      let s: { status: string; rows: ExtractionRow[]; error: string | null };
+      try {
+        s = (await pollJob({ data: { jobId } })) as typeof s;
+      } catch {
+        continue; // transient poll error → keep trying
+      }
+      if (s.status === "completed") {
+        if (!s.rows.length) return { ok: false, error: "No data could be extracted from this document." };
+        return { ok: true, rows: s.rows };
+      }
+      if (s.status === "failed") return { ok: false, error: s.error || "Extraction failed." };
+    }
+    return { ok: false, error: "Extraction timed out. Please try again." };
+  };
 
   const refreshUsage = useCallback(async () => {
     try {
@@ -150,7 +181,7 @@ function Dashboard() {
     const isImage = /^image\//i.test(file.type) || /\.(png|jpe?g|webp)$/i.test(file.name);
 
     try {
-      type AIResult = { ok: false; error: string } | { ok: true; row: Omit<ExtractedRow, "id" | "fileName"> };
+      type AIResult = { ok: false; error: string } | { ok: true; rows: ExtractionRow[] };
       let res: AIResult;
       let pages = 1;
 
@@ -164,7 +195,7 @@ function Dashboard() {
           if (estimatedDataUrlSize > 20_000_000) {
             throw new Error("Image too large to process. Please use a smaller image (max ~15MB effective).");
           }
-          res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
+          res = await runJob({ kind: "image", imageDataUrl, fileName: file.name });
         } catch (e) {
           const msg = extractClientError(e);
           console.error("[dashboard] Image extraction failed:", msg);
@@ -190,26 +221,26 @@ function Dashboard() {
         if (charCount < 20) {
           toast.info("Scanned PDF detected — switching to vision model…");
           const imageDataUrl = await pdfPageToImageDataUrl(file, 1);
-          res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
+          res = await runJob({ kind: "image", imageDataUrl, fileName: file.name });
         } else if (charCount > MAX_CHAR_LIMIT) {
           throw new Error(`Document text too large (${charCount.toLocaleString()} characters, ~${tokenEstimate.toLocaleString()} tokens). Maximum is 6M characters (~1.5M tokens).`);
         } else if (charCount > WARN_CHAR_LIMIT) {
           // ✅ Warn about large documents but allow processing (chunking will handle it)
-          toast.warning(`Large document: ${charCount.toLocaleString()} chars (~${tokenEstimate.toLocaleString()} tokens). This will be split into multiple chunks and take longer to process.`);
-          res = (await extract({ data: { text: extracted.text, fileName: file.name } })) as AIResult;
+          toast.warning(`Large document: ${charCount.toLocaleString()} chars (~${tokenEstimate.toLocaleString()} tokens). Processing in the background — this may take a little while.`);
+          res = await runJob({ kind: "text", text: extracted.text, fileName: file.name });
 
           if (!res.ok && res.error === "__NEEDS_VISION__") {
             toast.info("Scanned PDF detected — switching to vision model…");
             const imageDataUrl = await pdfPageToImageDataUrl(file, 1);
-            res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
+            res = await runJob({ kind: "image", imageDataUrl, fileName: file.name });
           }
         } else {
-          res = (await extract({ data: { text: extracted.text, fileName: file.name } })) as AIResult;
+          res = await runJob({ kind: "text", text: extracted.text, fileName: file.name });
 
           if (!res.ok && res.error === "__NEEDS_VISION__") {
             toast.info("Scanned PDF detected — switching to vision model…");
             const imageDataUrl = await pdfPageToImageDataUrl(file, 1);
-            res = (await extractVision({ data: { imageDataUrl, fileName: file.name } })) as AIResult;
+            res = await runJob({ kind: "image", imageDataUrl, fileName: file.name });
           }
         }
       }
@@ -226,7 +257,11 @@ function Dashboard() {
 
       const result = res;
 
-      const extracted: ExtractedRow = { id: crypto.randomUUID(), fileName: file.name, ...result.row };
+      const extractedRows: ExtractedRow[] = result.rows.map((r) => ({
+        id: crypto.randomUUID(),
+        fileName: file.name,
+        ...r,
+      }));
 
       // Record successful upload server-side (atomic: enforces plan limit too)
       const recorded = (await logUpload({ data: { fileName: file.name } })) as
@@ -240,8 +275,8 @@ function Dashboard() {
       }
       setUsage(recorded.usage);
 
-      setRows([extracted]);
-      const newHistory = [extracted, ...history];
+      setRows(extractedRows);
+      const newHistory = [...extractedRows, ...history];
       setHistory(newHistory);
       saveHistory(newHistory);
 
