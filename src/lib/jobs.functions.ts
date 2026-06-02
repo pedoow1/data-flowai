@@ -87,6 +87,17 @@ export const createExtractionJob = createServerFn({ method: "POST" })
     return { ok: true as const, jobId: job.id as string };
   });
 
+// ── Result types (must be serializable for TanStack server fns) ──────────
+type Cell = { v: string; c: number };
+export type ExtractionRow = {
+  invoiceNumber: Cell;
+  client: Cell;
+  date: Cell;
+  amount: Cell;
+  tax: Cell;
+  total: Cell;
+};
+
 // ── Poll the status/result of a job ──────────────────────────────────────
 export const getJobStatus = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -99,12 +110,14 @@ export const getJobStatus = createServerFn({ method: "POST" })
       .eq("id", data.jobId)
       .maybeSingle();
 
-    if (error) return { status: "failed" as const, output: null, error: error.message };
-    if (!job) return { status: "failed" as const, output: null, error: "Job not found." };
+    if (error) return { status: "failed" as const, rows: [] as ExtractionRow[], error: error.message };
+    if (!job) return { status: "failed" as const, rows: [] as ExtractionRow[], error: "Job not found." };
 
+    const output = (job.output as { rows?: ExtractionRow[] } | null) ?? null;
     return {
       status: job.status as "pending" | "processing" | "completed" | "failed",
-      output: (job.output as { rows?: unknown[] } | null) ?? null,
+      rows: (output?.rows ?? []) as ExtractionRow[],
       error: (job.error as string | null) ?? null,
     };
   });
+
