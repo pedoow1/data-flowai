@@ -189,21 +189,20 @@ async function runWithRetry(
       console.error(`[extract/${model}] GitHub ${status}:`, bodyText.slice(0, 400));
 
       if (status === 503 || status === 502 || status === 524) {
-        lastError = "GitHub Models is temporarily unavailable.";
-        await new Promise((r) => setTimeout(r, 5_000 * attempt));
-        continue;
-      }
-      if (status === 429) {
-        lastError = "GitHub Models rate limit reached.";
-        await new Promise((r) => setTimeout(r, 10_000 * attempt));
-        continue;
-      }
-      if (status === 401 || status === 403) {
-        return { ok: false, error: "GitHub Models authentication failed — check your GITHUB_TOKEN in Vercel." };
-      }
-      if (status === 404) {
-        return { ok: false, error: `GitHub model not found: ${model}.` };
-      }
+      if (status === 503 || status === 502 || status === 524) {
+  lastError = "Google AI is temporarily unavailable.";
+  ...
+}
+if (status === 429) {
+  lastError = "Google AI rate limit reached.";
+  ...
+}
+if (status === 401 || status === 403) {
+  return { ok: false, error: "Google AI authentication failed — check your GOOGLE_API_KEY in Vercel." };
+}
+if (status === 404) {
+  return { ok: false, error: `Google AI model not found: ${model}.` };
+}
       try {
         const parsed = JSON.parse(bodyText);
         const msg = parsed?.error?.message || parsed?.message;
