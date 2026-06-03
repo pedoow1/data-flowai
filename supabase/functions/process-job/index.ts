@@ -25,38 +25,26 @@ const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
 type Cell = { v: string; c: number };
 type FlexibleRow = Record<string, Cell>;
 
-// ── FLEXIBLE PROMPT: Extract ALL fields, not just 6 hardcoded ones ───────────
-const FLEXIBLE_PROMPT = `You are a precision invoice and document data extraction engine.
+// ── FLEXIBLE PROMPT: extract EVERY field that appears, not a fixed set ────────
+const FLEXIBLE_PROMPT = `You are a precision document data-extraction engine for invoices, receipts, orders, statements and tables.
 
-Your task: Extract ALL structured fields from the document and return ONLY valid JSON.
+Your task: extract EVERY record and EVERY field that actually appears in the document, then return ONLY valid JSON.
 
-For each invoice found, return an object with these fields (include as many as are present):
-- invoiceNumber: the invoice/receipt/order/transaction number
-- client OR vendor OR billTo OR seller: the company/person name
-- date OR invoiceDate: the date (ISO YYYY-MM-DD if possible)
-- amount OR subtotal OR netAmount: subtotal before tax
-- tax OR vat OR gst: tax amount (or "—" if absent)
-- total OR grandTotal: final amount with tax
-- dueDate (if present)
-- reference OR poNumber OR orderNumber (if present)
-- description OR items (if present)
-- paymentTerms (if present)
-- notes (if present)
+OUTPUT SHAPE:
+- Return a JSON ARRAY of records. Each record is one invoice / row / line item.
+- Each record is an object whose KEYS are the field names AS THEY APPEAR in the document
+  (e.g. "Invoice Number", "Bill To", "Description", "Quantity", "Unit Price", "PO Number", "Due Date", "Total").
+- Each VALUE is an object: { "v": <exact value>, "c": <confidence 0-100> }.
 
-For EACH field:
-- "v": the EXACT value from the document (never truncate, abbreviate, or paraphrase)
-- "c": confidence score 0-100
+ABSOLUTE RULES:
+1. DO NOT assume a fixed set of columns. Use ONLY the fields that genuinely exist in this document.
+2. If a column the user cares about (date, tax, etc.) is NOT in the document, simply OMIT it — never invent it and never add a "—" placeholder.
+3. Extract ALL records. Never stop early. If there are 100 invoices, return 100 objects. If a record is missing some fields, still include the record with the fields it has.
+4. Copy every value EXACTLY (numbers, dates, names, IDs) — never truncate, round, reformat, or paraphrase.
+5. Keep field names consistent across records so they line up as columns.
+6. Return ONLY the JSON array — no prose, no markdown, no code fences.`;
 
-If a field is missing: don't include it (don't use "—" as placeholder unless it explicitly appears).
-
-CRITICAL RULES:
-- Extract ALL invoices in the document (return JSON ARRAY if multiple, single OBJECT if one)
-- Never lose data due to missing fields
-- Copy numbers/dates/company names EXACTLY as they appear
-- If this chunk has multiple invoices, extract ALL
-- Return ONLY valid JSON, no prose, no markdown, no code fences`;
-
-const USER_SUFFIX = `\n\nIMPORTANT: Do not truncate any text, numbers, or company names. Copy every value exactly as it appears in the document, character by character. Extract ALL invoices present, even if some fields are missing.`;
+const USER_SUFFIX = `\n\nReturn a JSON ARRAY. Extract EVERY record and EVERY field present — do not drop rows, do not invent fields that are absent, and copy values character-by-character.`;
 
 // ── GitHub Models API call ───────────────────────────────────────────────
 async function callGitHubModels(model: string, messages: unknown[]): Promise<{ status: number; bodyText: string }> {
