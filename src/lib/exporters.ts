@@ -1,4 +1,4 @@
-import type { ExtractedRow } from "@/lib/flexible-schema";
+import type { ExtractedRow } from "@/components/AuditTable";
 
 function sanitize(s: string) { return s.replace(/[^a-z0-9-_]+/gi, "_").slice(0, 60); }
 
