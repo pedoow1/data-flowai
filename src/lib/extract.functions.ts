@@ -8,7 +8,7 @@ import { FlexibleRowSchema, FlexibleMultiRowSchema, normalizeRow } from "./flexi
 // ── API configuration ────────────────────────────────────────────────────────
 const TEXT_MODEL = "gemini-3-flash-preview";
 const VISION_MODEL = "gemini-3-flash-preview";
-const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
+const GEMINI_API = "https://generativelanguage.googleapis.com/v1beta/models";
 const TIMEOUT_MS = 300_000;
 const MAX_TOKENS = 8000;
 const CHUNK_SIZE = 8000;
