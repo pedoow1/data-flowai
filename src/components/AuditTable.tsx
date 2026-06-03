@@ -2,18 +2,51 @@ import { Download, FileJson, FileSpreadsheet, Sparkles, Loader2, Lock } from "lu
 import { isExportFormatAllowed, getExportFormatLabel, type ExportFormat } from "@/lib/exporters";
 import { toast } from "sonner";
 
+export type Cell = { v: string; c: number };
+
+// Flexible row: `id` + `fileName` plus whatever fields the document contained.
 export type ExtractedRow = {
   id: string;
   fileName: string;
-  invoiceNumber: { v: string; c: number };
-  client: { v: string; c: number };
-  date: { v: string; c: number };
-  amount: { v: string; c: number };
-  tax: { v: string; c: number };
-  total: { v: string; c: number };
+  [key: string]: string | Cell;
 };
 
-export type Cell = { v: string; c: number };
+function isCell(x: unknown): x is Cell {
+  return !!x && typeof x === "object" && "v" in (x as Record<string, unknown>);
+}
+
+// Human-friendly labels for known canonical keys; unknown keys are prettified.
+const LABELS: Record<string, string> = {
+  invoiceNumber: "Invoice #", client: "Client", vendor: "Vendor", date: "Date",
+  dueDate: "Due Date", amount: "Amount", tax: "Tax", total: "Total",
+  poNumber: "PO #", reference: "Reference", description: "Description",
+  quantity: "Qty", unitPrice: "Unit Price", paymentTerms: "Terms",
+  currency: "Currency", status: "Status", notes: "Notes",
+};
+// Preferred column order; anything else is appended in first-seen order.
+const PRIORITY = ["invoiceNumber", "client", "vendor", "date", "dueDate", "description", "quantity", "unitPrice", "amount", "tax", "total"];
+
+function prettify(key: string): string {
+  if (LABELS[key]) return LABELS[key];
+  return key
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Build the union of all field keys across rows, ordered by PRIORITY then first-seen.
+function columnKeys(rows: ExtractedRow[]): string[] {
+  const seen = new Set<string>();
+  for (const r of rows) {
+    for (const k of Object.keys(r)) {
+      if (k === "id" || k === "fileName") continue;
+      if (isCell(r[k])) seen.add(k);
+    }
+  }
+  const ordered = PRIORITY.filter((k) => seen.has(k));
+  const rest = [...seen].filter((k) => !PRIORITY.includes(k));
+  return [...ordered, ...rest];
+}
 
 // Mock extractor — generates plausible data per uploaded file
 export function mockExtract(file: File): Promise<ExtractedRow> {
