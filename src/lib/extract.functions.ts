@@ -12,7 +12,7 @@ const GOOGLE_API = "https://generativelanguage.googleapis.com/v1beta/models";
 const TIMEOUT_MS = 400000;
 const MAX_TOKENS = 20000;
 const CHUNK_SIZE = 20000;
-const PARALLEL_LIMIT = 5;
+const PARALLEL_LIMIT = 8;
 const BATCH_DELAY_MS = 1000;
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
