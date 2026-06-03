@@ -89,14 +89,8 @@ export const createExtractionJob = createServerFn({ method: "POST" })
 
 // ── Result types (must be serializable for TanStack server fns) ──────────
 type Cell = { v: string; c: number };
-export type ExtractionRow = {
-  invoiceNumber: Cell;
-  client: Cell;
-  date: Cell;
-  amount: Cell;
-  tax: Cell;
-  total: Cell;
-};
+// Flexible row: columns are whatever fields the document actually contains.
+export type ExtractionRow = Record<string, Cell>;
 
 // ── Poll the status/result of a job ──────────────────────────────────────
 export const getJobStatus = createServerFn({ method: "POST" })

@@ -12,10 +12,11 @@ const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TEXT_MODEL = "gpt-4o-mini";
 const VISION_MODEL = "gpt-4o";
 const TIMEOUT_MS = 300_000;
-const MAX_TOKENS = 8000;
-const CHUNK_SIZE = 8000;
-const PARALLEL_LIMIT = 2;
-const BATCH_DELAY_MS = 300;
+const MAX_TOKENS = 16000;
+const CHUNK_SIZE = 9000;
+const CHUNK_OVERLAP = 900;   // overlap so invoices split across boundaries aren't lost
+const PARALLEL_LIMIT = 4;    // more parallelism → big docs finish much faster
+const BATCH_DELAY_MS = 250;
 
 const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -24,38 +25,26 @@ const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
 type Cell = { v: string; c: number };
 type FlexibleRow = Record<string, Cell>;
 
-// ── FLEXIBLE PROMPT: Extract ALL fields, not just 6 hardcoded ones ───────────
-const FLEXIBLE_PROMPT = `You are a precision invoice and document data extraction engine.
+// ── FLEXIBLE PROMPT: extract EVERY field that appears, not a fixed set ────────
+const FLEXIBLE_PROMPT = `You are a precision document data-extraction engine for invoices, receipts, orders, statements and tables.
 
-Your task: Extract ALL structured fields from the document and return ONLY valid JSON.
+Your task: extract EVERY record and EVERY field that actually appears in the document, then return ONLY valid JSON.
 
-For each invoice found, return an object with these fields (include as many as are present):
-- invoiceNumber: the invoice/receipt/order/transaction number
-- client OR vendor OR billTo OR seller: the company/person name
-- date OR invoiceDate: the date (ISO YYYY-MM-DD if possible)
-- amount OR subtotal OR netAmount: subtotal before tax
-- tax OR vat OR gst: tax amount (or "—" if absent)
-- total OR grandTotal: final amount with tax
-- dueDate (if present)
-- reference OR poNumber OR orderNumber (if present)
-- description OR items (if present)
-- paymentTerms (if present)
-- notes (if present)
+OUTPUT SHAPE:
+- Return a JSON ARRAY of records. Each record is one invoice / row / line item.
+- Each record is an object whose KEYS are the field names AS THEY APPEAR in the document
+  (e.g. "Invoice Number", "Bill To", "Description", "Quantity", "Unit Price", "PO Number", "Due Date", "Total").
+- Each VALUE is an object: { "v": <exact value>, "c": <confidence 0-100> }.
 
-For EACH field:
-- "v": the EXACT value from the document (never truncate, abbreviate, or paraphrase)
-- "c": confidence score 0-100
+ABSOLUTE RULES:
+1. DO NOT assume a fixed set of columns. Use ONLY the fields that genuinely exist in this document.
+2. If a column the user cares about (date, tax, etc.) is NOT in the document, simply OMIT it — never invent it and never add a "—" placeholder.
+3. Extract ALL records. Never stop early. If there are 100 invoices, return 100 objects. If a record is missing some fields, still include the record with the fields it has.
+4. Copy every value EXACTLY (numbers, dates, names, IDs) — never truncate, round, reformat, or paraphrase.
+5. Keep field names consistent across records so they line up as columns.
+6. Return ONLY the JSON array — no prose, no markdown, no code fences.`;
 
-If a field is missing: don't include it (don't use "—" as placeholder unless it explicitly appears).
-
-CRITICAL RULES:
-- Extract ALL invoices in the document (return JSON ARRAY if multiple, single OBJECT if one)
-- Never lose data due to missing fields
-- Copy numbers/dates/company names EXACTLY as they appear
-- If this chunk has multiple invoices, extract ALL
-- Return ONLY valid JSON, no prose, no markdown, no code fences`;
-
-const USER_SUFFIX = `\n\nIMPORTANT: Do not truncate any text, numbers, or company names. Copy every value exactly as it appears in the document, character by character. Extract ALL invoices present, even if some fields are missing.`;
+const USER_SUFFIX = `\n\nReturn a JSON ARRAY. Extract EVERY record and EVERY field present — do not drop rows, do not invent fields that are absent, and copy values character-by-character.`;
 
 // ── GitHub Models API call ───────────────────────────────────────────────
 async function callGitHubModels(model: string, messages: unknown[]): Promise<{ status: number; bodyText: string }> {
@@ -82,40 +71,96 @@ function isValidCell(x: unknown): x is Cell {
 }
 
 function toCell(x: unknown): Cell | null {
-  if (isValidCell(x)) return { v: (x as Cell).v, c: (x as Cell).c };
-  if (typeof x === "string" && x.trim()) return { v: x, c: 80 };
+  if (isValidCell(x)) return { v: String((x as Cell).v).trim(), c: (x as Cell).c };
+  if (x && typeof x === "object" && "v" in (x as Record<string, unknown>)) {
+    const v = (x as Record<string, unknown>).v;
+    if (typeof v === "string" && v.trim()) return { v: v.trim(), c: 80 };
+    if (typeof v === "number") return { v: String(v), c: 80 };
+  }
+  if (typeof x === "string" && x.trim()) return { v: x.trim(), c: 80 };
   if (typeof x === "number") return { v: String(x), c: 80 };
   return null;
 }
 
-// Map the many field-name variants the model may emit to the 6 canonical
-// fields the UI expects. The output always contains these 6 keys.
-const FIELD_ALIASES: Record<string, string[]> = {
-  invoiceNumber: ["invoicenumber", "invoiceno", "invoice_number", "number", "invoice", "reference", "ponumber", "ordernumber", "transactionnumber"],
-  client: ["client", "customer", "billto", "buyer", "clientname", "customername", "billedto", "vendor", "seller", "company"],
-  date: ["date", "invoicedate", "invoice_date", "issuedate"],
-  amount: ["amount", "subtotal", "sub_total", "netamount", "net"],
-  tax: ["tax", "vat", "gst", "taxamount"],
-  total: ["total", "grandtotal", "grand_total", "amountdue", "totalamount", "balancedue"],
+// Map common field-name variants to a stable canonical label so the SAME
+// concept lines up as ONE column across records — WITHOUT dropping any field
+// that doesn't match. Anything unknown keeps its original document label.
+const CANON: Record<string, string> = {
+  "invoice number": "invoiceNumber", "invoice no": "invoiceNumber", "invoice #": "invoiceNumber",
+  "invoice": "invoiceNumber", "invoicenumber": "invoiceNumber", "invoiceno": "invoiceNumber",
+  "receipt number": "invoiceNumber", "order number": "invoiceNumber", "transaction number": "invoiceNumber",
+  "receipt": "invoiceNumber", "receipt no": "invoiceNumber", "order": "invoiceNumber", "order no": "invoiceNumber",
+  "bill number": "invoiceNumber", "doc number": "invoiceNumber", "id": "invoiceNumber",
+  "client": "client", "customer": "client", "bill to": "client", "billto": "client", "billed to": "client",
+  "buyer": "client", "client name": "client", "customer name": "client", "company": "client", "account": "client",
+  "vendor": "vendor", "seller": "vendor", "supplier": "vendor", "from": "vendor",
+  "date": "date", "invoice date": "date", "issue date": "date", "issued": "date",
+  "due date": "dueDate", "duedate": "dueDate", "payment due": "dueDate",
+  "amount": "amount", "subtotal": "amount", "sub total": "amount", "net amount": "amount", "net": "amount",
+  "tax": "tax", "vat": "tax", "gst": "tax", "tax amount": "tax", "sales tax": "tax",
+  "total": "total", "grand total": "total", "amount due": "total", "total amount": "total", "balance due": "total",
+  "po number": "poNumber", "po": "poNumber", "purchase order": "poNumber",
+  "reference": "reference", "ref": "reference",
+  "description": "description", "items": "description", "item": "description",
+  "quantity": "quantity", "qty": "quantity",
+  "unit price": "unitPrice", "price": "unitPrice", "rate": "unitPrice",
+  "payment terms": "paymentTerms", "terms": "paymentTerms",
+  "currency": "currency", "status": "status", "notes": "notes", "note": "notes",
 };
 
-function normalizeRow(x: unknown): FlexibleRow | null {
-  if (!x || typeof x !== "object") return null;
-  const o = x as Record<string, unknown>;
-  const lower: Record<string, unknown> = {};
-  for (const k of Object.keys(o)) lower[k.toLowerCase()] = o[k];
+function canonKey(k: string): string {
+  const norm = k.trim().toLowerCase().replace(/[_]+/g, " ").replace(/\s+/g, " ").trim();
+  if (CANON[norm]) return CANON[norm];
+  if (CANON[norm.replace(/\s+/g, "")]) return CANON[norm.replace(/\s+/g, "")];
+  return k.trim();
+}
 
-  const out: FlexibleRow = {} as FlexibleRow;
-  for (const canon of Object.keys(FIELD_ALIASES)) {
-    let cell: Cell | null = null;
-    for (const alias of FIELD_ALIASES[canon]) {
-      const c = toCell(lower[alias]);
-      if (c) { cell = c; break; }
-    }
-    out[canon] = cell ?? { v: "—", c: 0 };
+// Keep EVERY field the model returns (mapping known aliases to one canonical
+// key). No fixed schema — the columns are whatever the document contains.
+function normalizeRow(x: unknown): FlexibleRow | null {
+  if (!x || typeof x !== "object" || Array.isArray(x)) return null;
+  const o = x as Record<string, unknown>;
+  const out: FlexibleRow = {};
+  for (const k of Object.keys(o)) {
+    const cell = toCell(o[k]);
+    if (!cell || !cell.v || cell.v === "—") continue;
+    const key = canonKey(k);
+    if (!out[key]) out[key] = cell; // first non-empty value wins
   }
-  const meaningful = ["invoiceNumber", "client", "total", "amount"].some((k) => out[k].v !== "—");
-  return meaningful ? out : null;
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+// Unwrap common wrappers like { invoices: [...] } / { data: [...] } so we
+// never accidentally treat the whole payload as a single record.
+function toRowArray(parsed: unknown): unknown[] {
+  if (Array.isArray(parsed)) return parsed;
+  if (parsed && typeof parsed === "object") {
+    const o = parsed as Record<string, unknown>;
+    for (const key of ["invoices", "rows", "records", "data", "results", "items", "documents"]) {
+      if (Array.isArray(o[key])) return o[key] as unknown[];
+    }
+    return [parsed];
+  }
+  return [];
+}
+
+// Signature used to drop duplicate rows produced by chunk overlap.
+function rowSig(r: FlexibleRow): string {
+  const inv = r.invoiceNumber?.v?.trim().toLowerCase();
+  if (inv) return "inv:" + inv;
+  return "all:" + Object.entries(r).map(([k, c]) => `${k}=${c.v}`).sort().join("|").toLowerCase();
+}
+
+function dedupeRows(rows: FlexibleRow[]): FlexibleRow[] {
+  const seen = new Set<string>();
+  const out: FlexibleRow[] = [];
+  for (const r of rows) {
+    const sig = rowSig(r);
+    if (seen.has(sig)) continue;
+    seen.add(sig);
+    out.push(r);
+  }
+  return out;
 }
 
 function parseResponse(status: number, bodyText: string): { ok: true; rows: FlexibleRow[] } | { ok: false; error: string } | null {
@@ -127,11 +172,8 @@ function parseResponse(status: number, bodyText: string): { ok: true; rows: Flex
   const cleaned = content.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
   let parsed: unknown;
   try { parsed = JSON.parse(cleaned); } catch { return { ok: false, error: "AI returned an unparseable response." }; }
-  
-  // Handle both single object and array, normalizing field names to the
-  // 6 canonical fields the UI expects.
-  const arr = Array.isArray(parsed) ? parsed : [parsed];
-  const rows = arr.map(normalizeRow).filter((r): r is FlexibleRow => r !== null);
+
+  const rows = toRowArray(parsed).map(normalizeRow).filter((r): r is FlexibleRow => r !== null);
 
   if (rows.length === 0) return { ok: false, error: "AI response missing data. Please retry." };
   return { ok: true, rows };
@@ -170,15 +212,17 @@ async function runWithRetry(model: string, messages: unknown[]): Promise<{ ok: t
   return { ok: false, error: `${lastError} Please try again.` };
 }
 
-function chunkText(text: string, size: number): string[] {
+function chunkText(text: string, size: number, overlap: number): string[] {
   const chunks: string[] = [];
-  for (let i = 0; i < text.length; i += size) chunks.push(text.slice(i, i + size));
+  const step = Math.max(1, size - overlap);
+  for (let i = 0; i < text.length; i += step) chunks.push(text.slice(i, i + size));
   return chunks.length > 0 ? chunks : [""];
 }
 
 async function extractFromText(text: string, fileName: string): Promise<{ ok: true; rows: FlexibleRow[] } | { ok: false; error: string }> {
-  const chunks = chunkText(text, CHUNK_SIZE);
+  const chunks = chunkText(text, CHUNK_SIZE, CHUNK_OVERLAP);
   const allRows: FlexibleRow[] = [];
+  let firstError: string | null = null;
   for (let start = 0; start < chunks.length; start += PARALLEL_LIMIT) {
     const end = Math.min(start + PARALLEL_LIMIT, chunks.length);
     const batch = chunks.slice(start, end);
@@ -191,12 +235,14 @@ async function extractFromText(text: string, fileName: string): Promise<{ ok: tr
     for (let i = 0; i < results.length; i++) {
       const r = results[i];
       if (r.ok) allRows.push(...r.rows);
-      else if (start + i === 0) return { ok: false, error: r.error };
+      else if (firstError === null) firstError = r.error;
     }
     if (end < chunks.length) await new Promise((res) => setTimeout(res, BATCH_DELAY_MS));
   }
-  if (allRows.length === 0) return { ok: false, error: "Failed to extract data from any chunk." };
-  return { ok: true, rows: allRows };
+  // Don't fail the whole job for a single chunk hiccup — only fail when we got
+  // nothing at all. Overlapping chunks may produce duplicates → dedupe them.
+  if (allRows.length === 0) return { ok: false, error: firstError ?? "Failed to extract data from any chunk." };
+  return { ok: true, rows: dedupeRows(allRows) };
 }
 
 async function extractFromImage(imageDataUrl: string, fileName: string): Promise<{ ok: true; rows: FlexibleRow[] } | { ok: false; error: string }> {
