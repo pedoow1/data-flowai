@@ -89,6 +89,8 @@ const CANON: Record<string, string> = {
   "invoice number": "invoiceNumber", "invoice no": "invoiceNumber", "invoice #": "invoiceNumber",
   "invoice": "invoiceNumber", "invoicenumber": "invoiceNumber", "invoiceno": "invoiceNumber",
   "receipt number": "invoiceNumber", "order number": "invoiceNumber", "transaction number": "invoiceNumber",
+  "receipt": "invoiceNumber", "receipt no": "invoiceNumber", "order": "invoiceNumber", "order no": "invoiceNumber",
+  "bill number": "invoiceNumber", "doc number": "invoiceNumber", "id": "invoiceNumber",
   "client": "client", "customer": "client", "bill to": "client", "billto": "client", "billed to": "client",
   "buyer": "client", "client name": "client", "customer name": "client", "company": "client", "account": "client",
   "vendor": "vendor", "seller": "vendor", "supplier": "vendor", "from": "vendor",
