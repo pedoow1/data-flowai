@@ -40,7 +40,7 @@ const ImageInputSchema = z.object({
   fileName:     z.string().min(1).max(255),
 });
 
-// ── FLEXIBLE PROMPT: Extract ALL fields, not just 6 hardcoded ones ───────────
+// ── FLEXIBLE PROMPT ──────────────────────────────────────────────────────────
 const FLEXIBLE_PROMPT = `You are a precision invoice and document data extraction engine.
 
 Your task: Extract ALL structured fields from the document and return ONLY valid JSON.
@@ -73,7 +73,7 @@ CRITICAL RULES:
 
 const USER_SUFFIX = `\n\nIMPORTANT: Do not truncate any text, numbers, or company names. Copy every value exactly as it appears in the document, character by character. Extract ALL invoices present, even if some fields are missing.`;
 
-// ── GitHub Models API helper ─────────────────────────────────────────────────
+// ── Google Gemini API helper ─────────────────────────────────────────────────
 async function callGoogleAI(
   token: string,
   model: string,
@@ -82,12 +82,10 @@ async function callGoogleAI(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
-  // Convert OpenAI-style messages to Gemini format
   const contents = messages.map((msg: any) => {
     if (typeof msg.content === "string") {
       return { role: msg.role === "assistant" ? "model" : "user", parts: [{ text: msg.content }] };
     }
-    // Vision: array of content parts
     const parts = msg.content.map((p: any) => {
       if (p.type === "text") return { text: p.text };
       if (p.type === "image_url") {
@@ -119,7 +117,7 @@ async function callGoogleAI(
   }
 }
 
-// ── Flexible response parser (accepts any valid row structure) ─────────────
+// ── Flexible response parser ────────────────────────────────────────────────
 function parseFlexibleResponse(
   status: number,
   bodyText: string,
@@ -129,12 +127,12 @@ function parseFlexibleResponse(
 
   let json: any;
   try { json = JSON.parse(bodyText); }
-  catch { return { ok: false, error: "GitHub Models returned invalid JSON." }; }
+  catch { return { ok: false, error: "Google AI returned invalid JSON." }; }
 
   const content: string = json?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-if (!content) {
-  return { ok: false, error: "Google AI returned empty response." };
-}
+  if (!content) {
+    return { ok: false, error: "Google AI returned empty response." };
+  }
 
   const cleaned = content.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
 
@@ -145,11 +143,9 @@ if (!content) {
     return { ok: false, error: "AI returned an unparseable response. Please retry." };
   }
 
-  // Handle both single object and array
   let rows: FlexibleRow[] = [];
 
   if (Array.isArray(parsed)) {
-    // Response is already an array
     const validated = MultiRowSchema.safeParse(parsed);
     if (!validated.success) {
       console.error(`[extract/${model}] array schema mismatch:`, JSON.stringify(validated.error.issues).slice(0, 300));
@@ -157,7 +153,6 @@ if (!content) {
     }
     rows = validated.data.map(normalizeRow);
   } else {
-    // Response is a single object, wrap it
     const validated = FlexibleRowSchema.safeParse(parsed);
     if (!validated.success) {
       console.error(`[extract/${model}] schema mismatch:`, JSON.stringify(validated.error.issues).slice(0, 300));
@@ -186,29 +181,30 @@ async function runWithRetry(
         return result ?? { ok: false, error: "Failed to parse response." };
       }
 
-      console.error(`[extract/${model}] GitHub ${status}:`, bodyText.slice(0, 400));
+      console.error(`[extract/${model}] Google AI ${status}:`, bodyText.slice(0, 400));
 
+      // ✅ تم تصحيح الـ Block المكسور بالكامل هنا ليعمل الـ Compile بنجاح
       if (status === 503 || status === 502 || status === 524) {
-      if (status === 503 || status === 502 || status === 524) {
-  lastError = "Google AI is temporarily unavailable.";
-  ...
-}
-if (status === 429) {
-  lastError = "Google AI rate limit reached.";
-  ...
-}
-if (status === 401 || status === 403) {
-  return { ok: false, error: "Google AI authentication failed — check your GOOGLE_API_KEY in Vercel." };
-}
-if (status === 404) {
-  return { ok: false, error: `Google AI model not found: ${model}.` };
-}
+        lastError = "Google AI is temporarily unavailable.";
+        await new Promise((r) => setTimeout(r, 4000 * attempt));
+        continue;
+      } else if (status === 429) {
+        lastError = "Google AI rate limit reached.";
+        await new Promise((r) => setTimeout(r, 8000 * attempt));
+        continue;
+      } else if (status === 401 || status === 403) {
+        return { ok: false, error: "Google AI authentication failed — check your GOOGLE_API_KEY in Vercel." };
+      } else if (status === 404) {
+        return { ok: false, error: `Google AI model not found: ${model}.` };
+      }
+
       try {
         const parsed = JSON.parse(bodyText);
         const msg = parsed?.error?.message || parsed?.message;
-        if (msg) return { ok: false, error: `GitHub: ${msg}` };
+        if (msg) return { ok: false, error: `Google AI: ${msg}` };
       } catch { /* plain text body */ }
-      return { ok: false, error: `GitHub error (${status}): ${bodyText.slice(0, 200)}` };
+
+      return { ok: false, error: `Google AI error (${status}): ${bodyText.slice(0, 200)}` };
     } catch (e: any) {
       const isAbort = e?.name === "AbortError";
       lastError = isAbort ? "Extraction timed out." : (e?.message ?? "Network error");
@@ -253,7 +249,7 @@ async function processChunk(
   return runWithRetry(token, model, messages);
 }
 
-// ── Server function: text extraction (gpt-4o-mini) ─────
+// ── Server function: text extraction ────────────────────────────────────────
 export const extractFromText = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => TextInputSchema.parse(d))
@@ -261,8 +257,9 @@ export const extractFromText = createServerFn({ method: "POST" })
     const quotaError = await assertWithinQuota(context);
     if (quotaError) return { ok: false as const, error: quotaError };
 
+    // ✅ تم تصحيح الـ Token هنا ليسحب من مفتاح جوجل المناسب للـ URL
     const token = (process.env.GOOGLE_API_KEY || "").trim();
-if (!token) return { ok: false as const, error: "Server misconfigured (missing GOOGLE_API_KEY)." };
+    if (!token) return { ok: false as const, error: "Server misconfigured (missing GOOGLE_API_KEY)." };
 
     if (data.text.length < 20) {
       return { ok: false as const, error: "__NEEDS_VISION__" };
@@ -312,14 +309,11 @@ if (!token) return { ok: false as const, error: "Server misconfigured (missing G
     const elapsedTime = Date.now() - startTime;
     console.log(`[extract] Successfully processed all ${chunks.length} chunk(s) in ${elapsedTime}ms, extracted ${allResults.length} total invoice(s)`);
 
-    if (allResults.length === 1) {
-      return { ok: true as const, row: allResults[0] };
-    } else {
-      return { ok: true as const, rows: allResults };
-    }
+    // ✅ دايماً بنرجع مصفوفة rows موحدة عشان الـ Client Consistency
+    return { ok: true as const, rows: allResults };
   });
 
-// ── Server function: vision extraction (gpt-4o) ────
+// ── Server function: vision extraction ──────────────────────────────────────
 export const extractFromImage = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => ImageInputSchema.parse(d))
@@ -327,8 +321,9 @@ export const extractFromImage = createServerFn({ method: "POST" })
     const quotaError = await assertWithinQuota(context);
     if (quotaError) return { ok: false as const, error: quotaError };
 
-    const token = (process.env.GITHUB_TOKEN || "").trim();
-    if (!token) return { ok: false as const, error: "Server misconfigured (missing GITHUB_TOKEN)." };
+    // ✅ تم تصحيح الـ Token هنا ليسحب من مفتاح جوجل
+    const token = (process.env.GOOGLE_API_KEY || "").trim();
+    if (!token) return { ok: false as const, error: "Server misconfigured (missing GOOGLE_API_KEY)." };
 
     const messages = [
       {
@@ -351,11 +346,7 @@ export const extractFromImage = createServerFn({ method: "POST" })
     const result = await runWithRetry(token, VISION_MODEL, messages);
     
     if (result.ok) {
-      if (result.rows.length === 1) {
-        return { ok: true as const, row: result.rows[0] };
-      } else {
-        return { ok: true as const, rows: result.rows };
-      }
+      return { ok: true as const, rows: result.rows }; // ✅ مصفوفة موحدة دايماً
     } else {
       return result;
     }
