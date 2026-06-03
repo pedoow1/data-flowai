@@ -9,11 +9,11 @@ import { FlexibleRowSchema, FlexibleMultiRowSchema, normalizeRow } from "./flexi
 const TEXT_MODEL = "gemini-3.5-flash";
 const VISION_MODEL = "gemini-3.5-flash";
 const GOOGLE_API = "https://generativelanguage.googleapis.com/v1beta/models";
-const TIMEOUT_MS = 300_000;
-const MAX_TOKENS = 8000;
-const CHUNK_SIZE = 8000;
-const PARALLEL_LIMIT = 2;
-const BATCH_DELAY_MS = 300;
+const TIMEOUT_MS = 400000;
+const MAX_TOKENS = 250000;
+const CHUNK_SIZE = 20000;
+const PARALLEL_LIMIT = 15;
+const BATCH_DELAY_MS = 100;
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
   const isAdminEmail =
