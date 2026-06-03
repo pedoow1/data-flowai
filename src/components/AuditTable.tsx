@@ -166,8 +166,9 @@ export function AuditTable({
         <table className="w-full text-sm">
           <thead className="bg-white/[0.02] text-xs uppercase tracking-wider text-muted-foreground">
             <tr>
-              {["File", "Invoice #", "Client", "Date", "Amount", "Tax", "Total"].map(h => (
-                <th key={h} className="text-left font-medium px-4 py-3 whitespace-nowrap">{h}</th>
+              <th className="text-left font-medium px-4 py-3 whitespace-nowrap">File</th>
+              {cols.map(k => (
+                <th key={k} className="text-left font-medium px-4 py-3 whitespace-nowrap">{prettify(k)}</th>
               ))}
             </tr>
           </thead>
@@ -175,12 +176,11 @@ export function AuditTable({
             {rows.map(r => (
               <tr key={r.id} className="border-t border-border hover:bg-white/[0.02]">
                 <td className="px-4 py-2.5 text-xs text-muted-foreground max-w-[180px] truncate">{r.fileName}</td>
-                <td className="px-4 py-2.5"><EditableCell cell={r.invoiceNumber} onChange={(v) => update(r.id, "invoiceNumber", v)} /></td>
-                <td className="px-4 py-2.5"><EditableCell cell={r.client} onChange={(v) => update(r.id, "client", v)} /></td>
-                <td className="px-4 py-2.5"><EditableCell cell={r.date} onChange={(v) => update(r.id, "date", v)} /></td>
-                <td className="px-4 py-2.5"><EditableCell cell={r.amount} onChange={(v) => update(r.id, "amount", v)} /></td>
-                <td className="px-4 py-2.5"><EditableCell cell={r.tax} onChange={(v) => update(r.id, "tax", v)} /></td>
-                <td className="px-4 py-2.5"><EditableCell cell={r.total} onChange={(v) => update(r.id, "total", v)} /></td>
+                {cols.map(k => (
+                  <td key={k} className="px-4 py-2.5">
+                    <EditableCell cell={isCell(r[k]) ? (r[k] as Cell) : EMPTY} onChange={(v) => update(r.id, k, v)} />
+                  </td>
+                ))}
               </tr>
             ))}
           </tbody>
