@@ -7,9 +7,9 @@ const GOOGLE_API = "https://generativelanguage.googleapis.com/v1beta/models";
 const TEXT_MODEL = "gemini-3.5-flash";
 const VISION_MODEL = "gemini-3.5-flash";
 const MAX_TOKENS = 250000;
-const CHUNK_SIZE = 15000;
+const CHUNK_SIZE = 20000;
 const CHUNK_OVERLAP = 500;
-const PARALLEL_LIMIT = 15;      // ← غيّره لـ 8
+const PARALLEL_LIMIT = 12;      // ← غيّره لـ 8
 const BATCH_DELAY_MS = 100;    // ← غيّره لـ 100
 const TIMEOUT_MS = 400000; // ✅ تم إضافة المتغير هنا لمنع ضرب الـ ReferenceError
 
