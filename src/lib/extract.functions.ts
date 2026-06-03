@@ -261,8 +261,8 @@ export const extractFromText = createServerFn({ method: "POST" })
     const quotaError = await assertWithinQuota(context);
     if (quotaError) return { ok: false as const, error: quotaError };
 
-    const token = (process.env.GITHUB_TOKEN || "").trim();
-    if (!token) return { ok: false as const, error: "Server misconfigured (missing GITHUB_TOKEN)." };
+    const token = (process.env.GOOGLE_API_KEY || "").trim();
+if (!token) return { ok: false as const, error: "Server misconfigured (missing GOOGLE_API_KEY)." };
 
     if (data.text.length < 20) {
       return { ok: false as const, error: "__NEEDS_VISION__" };
