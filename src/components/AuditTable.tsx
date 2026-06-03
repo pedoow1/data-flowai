@@ -102,9 +102,17 @@ export function AuditTable({
   locked: boolean;
   plan?: "free" | "pro" | "team";
 }) {
-  const update = (id: string, key: keyof Omit<ExtractedRow, "id" | "fileName">, v: string) => {
-    setRows(rows.map(r => r.id === id ? { ...r, [key]: { ...(r[key] as Cell), v, c: 100 } } : r));
+  const update = (id: string, key: string, v: string) => {
+    setRows(rows.map(r => {
+      if (r.id !== id) return r;
+      const prev = isCell(r[key]) ? (r[key] as Cell) : { v: "", c: 100 };
+      return { ...r, [key]: { ...prev, v, c: 100 } };
+    }));
   };
+
+  const cols = columnKeys(rows);
+
+  const EMPTY: Cell = { v: "—", c: 0 };
 
   if (rows.length === 0) return null;
 
