@@ -6,9 +6,9 @@ import { ADMIN_EMAIL } from "./config";
 import { FlexibleRowSchema, FlexibleMultiRowSchema, normalizeRow } from "./flexible-schema";
 
 // ── API configuration ────────────────────────────────────────────────────────
-const TEXT_MODEL = "gpt-4o-mini";
-const VISION_MODEL = "gpt-4o";
-const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
+const TEXT_MODEL = "gemini-2.0-flash";
+const VISION_MODEL = "gemini-2.0-flash";
+const GOOGLE_API = "https://generativelanguage.googleapis.com/v1beta/models";
 const TIMEOUT_MS = 300_000;
 const MAX_TOKENS = 8000;
 const CHUNK_SIZE = 8000;
@@ -74,29 +74,45 @@ CRITICAL RULES:
 const USER_SUFFIX = `\n\nIMPORTANT: Do not truncate any text, numbers, or company names. Copy every value exactly as it appears in the document, character by character. Extract ALL invoices present, even if some fields are missing.`;
 
 // ── GitHub Models API helper ─────────────────────────────────────────────────
-async function callGitHubModels(
+async function callGoogleAI(
   token: string,
   model: string,
   messages: any[],
 ): Promise<{ status: number; bodyText: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  
-  try {
-    const res = await fetch(`${GITHUB_MODELS_API}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: 0.0,
-        max_tokens: MAX_TOKENS,
-      }),
+
+  // Convert OpenAI-style messages to Gemini format
+  const contents = messages.map((msg: any) => {
+    if (typeof msg.content === "string") {
+      return { role: msg.role === "assistant" ? "model" : "user", parts: [{ text: msg.content }] };
+    }
+    // Vision: array of content parts
+    const parts = msg.content.map((p: any) => {
+      if (p.type === "text") return { text: p.text };
+      if (p.type === "image_url") {
+        const [header, base64] = p.image_url.url.split(",");
+        const mimeType = header.match(/data:(.*);base64/)?.[1] || "image/jpeg";
+        return { inlineData: { mimeType, data: base64 } };
+      }
+      return { text: "" };
     });
+    return { role: "user", parts };
+  });
+
+  try {
+    const res = await fetch(
+      `${GOOGLE_API}/${model}:generateContent?key=${token}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          contents,
+          generationConfig: { temperature: 0.0, maxOutputTokens: MAX_TOKENS },
+        }),
+      }
+    );
     return { status: res.status, bodyText: await res.text() };
   } finally {
     clearTimeout(timer);
@@ -115,10 +131,10 @@ function parseFlexibleResponse(
   try { json = JSON.parse(bodyText); }
   catch { return { ok: false, error: "GitHub Models returned invalid JSON." }; }
 
-  const content: string = json?.choices?.[0]?.message?.content ?? "";
-  if (!content) {
-    return { ok: false, error: "GitHub Models returned empty response." };
-  }
+  const content: string = json?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+if (!content) {
+  return { ok: false, error: "Google AI returned empty response." };
+}
 
   const cleaned = content.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
 
@@ -163,7 +179,7 @@ async function runWithRetry(
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const { status, bodyText } = await callGitHubModels(token, model, messages);
+      const { status, bodyText } = await callGoogleAI(token, model, messages);
 
       if (status === 200) {
         const result = parseFlexibleResponse(status, bodyText, model);
