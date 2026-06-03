@@ -7,11 +7,11 @@ const GOOGLE_API = "https://generativelanguage.googleapis.com/v1beta/models";
 const TEXT_MODEL = "gemini-3.5-flash";
 const VISION_MODEL = "gemini-3.5-flash";
 const MAX_TOKENS = 250000;
-const CHUNK_SIZE = 50000;
+const CHUNK_SIZE = 170000;
 const CHUNK_OVERLAP = 500;
 const PARALLEL_LIMIT = 4;      // ← غيّره لـ 8
 const BATCH_DELAY_MS = 100;    // ← غيّره لـ 100
-const TIMEOUT_MS = 300000; // ✅ تم إضافة المتغير هنا لمنع ضرب الـ ReferenceError
+const TIMEOUT_MS = 400000; // ✅ تم إضافة المتغير هنا لمنع ضرب الـ ReferenceError
 
 const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
