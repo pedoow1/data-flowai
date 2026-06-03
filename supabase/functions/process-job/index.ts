@@ -210,15 +210,17 @@ async function runWithRetry(model: string, messages: unknown[]): Promise<{ ok: t
   return { ok: false, error: `${lastError} Please try again.` };
 }
 
-function chunkText(text: string, size: number): string[] {
+function chunkText(text: string, size: number, overlap: number): string[] {
   const chunks: string[] = [];
-  for (let i = 0; i < text.length; i += size) chunks.push(text.slice(i, i + size));
+  const step = Math.max(1, size - overlap);
+  for (let i = 0; i < text.length; i += step) chunks.push(text.slice(i, i + size));
   return chunks.length > 0 ? chunks : [""];
 }
 
 async function extractFromText(text: string, fileName: string): Promise<{ ok: true; rows: FlexibleRow[] } | { ok: false; error: string }> {
-  const chunks = chunkText(text, CHUNK_SIZE);
+  const chunks = chunkText(text, CHUNK_SIZE, CHUNK_OVERLAP);
   const allRows: FlexibleRow[] = [];
+  let firstError: string | null = null;
   for (let start = 0; start < chunks.length; start += PARALLEL_LIMIT) {
     const end = Math.min(start + PARALLEL_LIMIT, chunks.length);
     const batch = chunks.slice(start, end);
@@ -231,12 +233,14 @@ async function extractFromText(text: string, fileName: string): Promise<{ ok: tr
     for (let i = 0; i < results.length; i++) {
       const r = results[i];
       if (r.ok) allRows.push(...r.rows);
-      else if (start + i === 0) return { ok: false, error: r.error };
+      else if (firstError === null) firstError = r.error;
     }
     if (end < chunks.length) await new Promise((res) => setTimeout(res, BATCH_DELAY_MS));
   }
-  if (allRows.length === 0) return { ok: false, error: "Failed to extract data from any chunk." };
-  return { ok: true, rows: allRows };
+  // Don't fail the whole job for a single chunk hiccup — only fail when we got
+  // nothing at all. Overlapping chunks may produce duplicates → dedupe them.
+  if (allRows.length === 0) return { ok: false, error: firstError ?? "Failed to extract data from any chunk." };
+  return { ok: true, rows: dedupeRows(allRows) };
 }
 
 async function extractFromImage(imageDataUrl: string, fileName: string): Promise<{ ok: true; rows: FlexibleRow[] } | { ok: false; error: string }> {
