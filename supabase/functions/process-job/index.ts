@@ -1,7 +1,3 @@
-// Background job processor for invoice/document extraction.
-// Runs on Supabase Edge Functions (no Vercel timeout). It is triggered
-// fire-and-forget by the app; it responds immediately and keeps working in
-// the background via EdgeRuntime.waitUntil.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -13,9 +9,9 @@ const TEXT_MODEL = "gpt-4o-mini";
 const VISION_MODEL = "gpt-4o";
 const TIMEOUT_MS = 300_000;
 const MAX_TOKENS = 16000;
-const CHUNK_SIZE = 9000;
-const CHUNK_OVERLAP = 900;   // overlap so invoices split across boundaries aren't lost
-const PARALLEL_LIMIT = 4;    // more parallelism → big docs finish much faster
+const CHUNK_SIZE = 20000;
+const CHUNK_OVERLAP = 500;
+const PARALLEL_LIMIT = 4;
 const BATCH_DELAY_MS = 250;
 
 const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
@@ -25,28 +21,22 @@ const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
 type Cell = { v: string; c: number };
 type FlexibleRow = Record<string, Cell>;
 
-// ── FLEXIBLE PROMPT: extract EVERY field that appears, not a fixed set ────────
-const FLEXIBLE_PROMPT = `You are a precision document data-extraction engine for invoices, receipts, orders, statements and tables.
+const FLEXIBLE_PROMPT = `You are an elite invoice data extraction agent. Your job is to extract every line item as a separate row.
 
-Your task: extract EVERY record and EVERY field that actually appears in the document, then return ONLY valid JSON.
+CRITICAL RULES:
+1. LINE ITEM SPLITTING: Every invoice may contain multiple line items (services, products). You MUST create a SEPARATE row for each line item. Never merge multiple items into one row.
+2. For each line item row, duplicate the invoice metadata: invoice_number, client, date, dueDate, vendor.
+3. Each row must contain: invoice_number, client, date, dueDate, vendor, description, amount, quantity (if present), reference_id (if present).
+4. After all line item rows for an invoice, add one final summary row with description="TOTAL" and amount=the grand total of that invoice.
+5. Extract ALL invoices, ALL pages, ALL line items. Never skip or drop any.
+6. If invoice numbers are sequential (e.g. INV-001 to INV-100), make sure ALL numbers are present with no gaps.
+7. Copy every value EXACTLY as it appears — never truncate, round, or reformat.
+8. Return ONLY a valid JSON array, no prose, no markdown, no code fences.
 
-OUTPUT SHAPE:
-- Return a JSON ARRAY of records. Each record is one invoice / row / line item.
-- Each record is an object whose KEYS are the field names AS THEY APPEAR in the document
-  (e.g. "Invoice Number", "Bill To", "Description", "Quantity", "Unit Price", "PO Number", "Due Date", "Total").
-- Each VALUE is an object: { "v": <exact value>, "c": <confidence 0-100> }.
+EXAMPLE: An invoice with 3 services → 3 line item rows + 1 TOTAL row = 4 rows total, all with the same invoice_number/client/date.`;
 
-ABSOLUTE RULES:
-1. DO NOT assume a fixed set of columns. Use ONLY the fields that genuinely exist in this document.
-2. If a column the user cares about (date, tax, etc.) is NOT in the document, simply OMIT it — never invent it and never add a "—" placeholder.
-3. Extract ALL records. Never stop early. If there are 100 invoices, return 100 objects. If a record is missing some fields, still include the record with the fields it has.
-4. Copy every value EXACTLY (numbers, dates, names, IDs) — never truncate, round, reformat, or paraphrase.
-5. Keep field names consistent across records so they line up as columns.
-6. Return ONLY the JSON array — no prose, no markdown, no code fences.`;
+const USER_SUFFIX = `\n\nReturn a JSON ARRAY. Extract EVERY line item as a separate row, plus a TOTAL summary row per invoice. Do not drop rows, do not invent fields, copy values character-by-character.`;
 
-const USER_SUFFIX = `\n\nReturn a JSON ARRAY. Extract EVERY record and EVERY field present — do not drop rows, do not invent fields that are absent, and copy values character-by-character.`;
-
-// ── GitHub Models API call ───────────────────────────────────────────────
 async function callGitHubModels(model: string, messages: unknown[]): Promise<{ status: number; bodyText: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -82,17 +72,14 @@ function toCell(x: unknown): Cell | null {
   return null;
 }
 
-// Map common field-name variants to a stable canonical label so the SAME
-// concept lines up as ONE column across records — WITHOUT dropping any field
-// that doesn't match. Anything unknown keeps its original document label.
 const CANON: Record<string, string> = {
   "invoice number": "invoiceNumber", "invoice no": "invoiceNumber", "invoice #": "invoiceNumber",
   "invoice": "invoiceNumber", "invoicenumber": "invoiceNumber", "invoiceno": "invoiceNumber",
-  "receipt number": "invoiceNumber", "order number": "invoiceNumber", "transaction number": "invoiceNumber",
-  "receipt": "invoiceNumber", "receipt no": "invoiceNumber", "order": "invoiceNumber", "order no": "invoiceNumber",
-  "bill number": "invoiceNumber", "doc number": "invoiceNumber", "id": "invoiceNumber",
+  "invoice_number": "invoiceNumber", "receipt number": "invoiceNumber", "order number": "invoiceNumber",
+  "receipt": "invoiceNumber", "receipt no": "invoiceNumber", "order no": "invoiceNumber",
+  "bill number": "invoiceNumber", "doc number": "invoiceNumber",
   "client": "client", "customer": "client", "bill to": "client", "billto": "client", "billed to": "client",
-  "buyer": "client", "client name": "client", "customer name": "client", "company": "client", "account": "client",
+  "buyer": "client", "client name": "client", "customer name": "client", "company": "client", "account": "client", "to": "client",
   "vendor": "vendor", "seller": "vendor", "supplier": "vendor", "from": "vendor",
   "date": "date", "invoice date": "date", "issue date": "date", "issued": "date",
   "due date": "dueDate", "duedate": "dueDate", "payment due": "dueDate",
@@ -100,7 +87,7 @@ const CANON: Record<string, string> = {
   "tax": "tax", "vat": "tax", "gst": "tax", "tax amount": "tax", "sales tax": "tax",
   "total": "total", "grand total": "total", "amount due": "total", "total amount": "total", "balance due": "total",
   "po number": "poNumber", "po": "poNumber", "purchase order": "poNumber",
-  "reference": "reference", "ref": "reference",
+  "reference": "reference", "ref": "reference", "reference_id": "reference",
   "description": "description", "items": "description", "item": "description",
   "quantity": "quantity", "qty": "quantity",
   "unit price": "unitPrice", "price": "unitPrice", "rate": "unitPrice",
@@ -115,8 +102,6 @@ function canonKey(k: string): string {
   return k.trim();
 }
 
-// Keep EVERY field the model returns (mapping known aliases to one canonical
-// key). No fixed schema — the columns are whatever the document contains.
 function normalizeRow(x: unknown): FlexibleRow | null {
   if (!x || typeof x !== "object" || Array.isArray(x)) return null;
   const o = x as Record<string, unknown>;
@@ -125,13 +110,11 @@ function normalizeRow(x: unknown): FlexibleRow | null {
     const cell = toCell(o[k]);
     if (!cell || !cell.v || cell.v === "—") continue;
     const key = canonKey(k);
-    if (!out[key]) out[key] = cell; // first non-empty value wins
+    if (!out[key]) out[key] = cell;
   }
   return Object.keys(out).length > 0 ? out : null;
 }
 
-// Unwrap common wrappers like { invoices: [...] } / { data: [...] } so we
-// never accidentally treat the whole payload as a single record.
 function toRowArray(parsed: unknown): unknown[] {
   if (Array.isArray(parsed)) return parsed;
   if (parsed && typeof parsed === "object") {
@@ -144,9 +127,10 @@ function toRowArray(parsed: unknown): unknown[] {
   return [];
 }
 
-// Signature used to drop duplicate rows produced by chunk overlap.
 function rowSig(r: FlexibleRow): string {
   const inv = r.invoiceNumber?.v?.trim().toLowerCase();
+  const desc = r.description?.v?.trim().toLowerCase();
+  if (inv && desc) return `inv:${inv}|desc:${desc}`;
   if (inv) return "inv:" + inv;
   return "all:" + Object.entries(r).map(([k, c]) => `${k}=${c.v}`).sort().join("|").toLowerCase();
 }
@@ -172,9 +156,7 @@ function parseResponse(status: number, bodyText: string): { ok: true; rows: Flex
   const cleaned = content.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
   let parsed: unknown;
   try { parsed = JSON.parse(cleaned); } catch { return { ok: false, error: "AI returned an unparseable response." }; }
-
   const rows = toRowArray(parsed).map(normalizeRow).filter((r): r is FlexibleRow => r !== null);
-
   if (rows.length === 0) return { ok: false, error: "AI response missing data. Please retry." };
   return { ok: true, rows };
 }
@@ -188,7 +170,6 @@ async function runWithRetry(model: string, messages: unknown[]): Promise<{ ok: t
         const result = parseResponse(status, bodyText);
         return result ?? { ok: false, error: "Failed to parse response." };
       }
-      console.error(`[process-job/${model}] GitHub ${status}:`, bodyText.slice(0, 300));
       if (status === 503 || status === 502 || status === 524) {
         lastError = "GitHub Models is temporarily unavailable.";
         await new Promise((r) => setTimeout(r, 5_000 * attempt));
@@ -239,8 +220,6 @@ async function extractFromText(text: string, fileName: string): Promise<{ ok: tr
     }
     if (end < chunks.length) await new Promise((res) => setTimeout(res, BATCH_DELAY_MS));
   }
-  // Don't fail the whole job for a single chunk hiccup — only fail when we got
-  // nothing at all. Overlapping chunks may produce duplicates → dedupe them.
   if (allRows.length === 0) return { ok: false, error: firstError ?? "Failed to extract data from any chunk." };
   return { ok: true, rows: dedupeRows(allRows) };
 }
@@ -251,7 +230,7 @@ async function extractFromImage(imageDataUrl: string, fileName: string): Promise
       role: "user",
       content: [
         { type: "image_url", image_url: { url: imageDataUrl } },
-        { type: "text", text: `${FLEXIBLE_PROMPT}\n\nDocument filename: ${fileName}\n\nExtract ALL fields from this document image.${USER_SUFFIX}` },
+        { type: "text", text: `${FLEXIBLE_PROMPT}\n\nDocument filename: ${fileName}\n\nExtract ALL line items as separate rows.${USER_SUFFIX}` },
       ],
     },
   ];
@@ -308,8 +287,7 @@ Deno.serve(async (req) => {
         headers: { "Content-Type": "application/json" },
       });
     }
-    // Keep processing alive after the response is sent.
-    // @ts-ignore EdgeRuntime is available in the Supabase runtime
+    // @ts-ignore
     EdgeRuntime.waitUntil(processJob(jobId));
     return new Response(JSON.stringify({ received: true }), {
       headers: { "Content-Type": "application/json" },
