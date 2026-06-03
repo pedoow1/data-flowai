@@ -12,10 +12,11 @@ const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
 const TEXT_MODEL = "gpt-4o-mini";
 const VISION_MODEL = "gpt-4o";
 const TIMEOUT_MS = 300_000;
-const MAX_TOKENS = 8000;
-const CHUNK_SIZE = 8000;
-const PARALLEL_LIMIT = 2;
-const BATCH_DELAY_MS = 300;
+const MAX_TOKENS = 16000;
+const CHUNK_SIZE = 9000;
+const CHUNK_OVERLAP = 900;   // overlap so invoices split across boundaries aren't lost
+const PARALLEL_LIMIT = 4;    // more parallelism → big docs finish much faster
+const BATCH_DELAY_MS = 250;
 
 const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
