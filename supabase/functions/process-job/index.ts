@@ -81,12 +81,41 @@ function isValidCell(x: unknown): x is Cell {
   return !!x && typeof x === "object" && typeof (x as Cell).v === "string" && typeof (x as Cell).c === "number";
 }
 
-function isValidRow(x: unknown): x is FlexibleRow {
-  if (!x || typeof x !== "object") return false;
-  const r = x as Record<string, unknown>;
-  // Row is valid if it has AT LEAST ONE valid cell (flexible schema)
-  const values = Object.values(r);
-  return values.length > 0 && values.some(isValidCell);
+function toCell(x: unknown): Cell | null {
+  if (isValidCell(x)) return { v: (x as Cell).v, c: (x as Cell).c };
+  if (typeof x === "string" && x.trim()) return { v: x, c: 80 };
+  if (typeof x === "number") return { v: String(x), c: 80 };
+  return null;
+}
+
+// Map the many field-name variants the model may emit to the 6 canonical
+// fields the UI expects. The output always contains these 6 keys.
+const FIELD_ALIASES: Record<string, string[]> = {
+  invoiceNumber: ["invoicenumber", "invoiceno", "invoice_number", "number", "invoice", "reference", "ponumber", "ordernumber", "transactionnumber"],
+  client: ["client", "customer", "billto", "buyer", "clientname", "customername", "billedto", "vendor", "seller", "company"],
+  date: ["date", "invoicedate", "invoice_date", "issuedate"],
+  amount: ["amount", "subtotal", "sub_total", "netamount", "net"],
+  tax: ["tax", "vat", "gst", "taxamount"],
+  total: ["total", "grandtotal", "grand_total", "amountdue", "totalamount", "balancedue"],
+};
+
+function normalizeRow(x: unknown): FlexibleRow | null {
+  if (!x || typeof x !== "object") return null;
+  const o = x as Record<string, unknown>;
+  const lower: Record<string, unknown> = {};
+  for (const k of Object.keys(o)) lower[k.toLowerCase()] = o[k];
+
+  const out: FlexibleRow = {} as FlexibleRow;
+  for (const canon of Object.keys(FIELD_ALIASES)) {
+    let cell: Cell | null = null;
+    for (const alias of FIELD_ALIASES[canon]) {
+      const c = toCell(lower[alias]);
+      if (c) { cell = c; break; }
+    }
+    out[canon] = cell ?? { v: "—", c: 0 };
+  }
+  const meaningful = ["invoiceNumber", "client", "total", "amount"].some((k) => out[k].v !== "—");
+  return meaningful ? out : null;
 }
 
 function parseResponse(status: number, bodyText: string): { ok: true; rows: FlexibleRow[] } | { ok: false; error: string } | null {
@@ -99,10 +128,11 @@ function parseResponse(status: number, bodyText: string): { ok: true; rows: Flex
   let parsed: unknown;
   try { parsed = JSON.parse(cleaned); } catch { return { ok: false, error: "AI returned an unparseable response." }; }
   
-  // Handle both single object and array
+  // Handle both single object and array, normalizing field names to the
+  // 6 canonical fields the UI expects.
   const arr = Array.isArray(parsed) ? parsed : [parsed];
-  const rows = arr.filter(isValidRow) as FlexibleRow[];
-  
+  const rows = arr.map(normalizeRow).filter((r): r is FlexibleRow => r !== null);
+
   if (rows.length === 0) return { ok: false, error: "AI response missing data. Please retry." };
   return { ok: true, rows };
 }
