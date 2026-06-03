@@ -11,6 +11,7 @@ const CHUNK_SIZE = 20000;
 const CHUNK_OVERLAP = 500;
 const PARALLEL_LIMIT = 4;
 const BATCH_DELAY_MS = 250;
+const TIMEOUT_MS = 60000; // ✅ تم إضافة المتغير هنا لمنع ضرب الـ ReferenceError
 
 const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -72,9 +73,7 @@ async function callGoogleAI(model: string, messages: unknown[]): Promise<{ statu
   } finally {
     clearTimeout(timer);
   }
-}
-  }
-}
+} // ✅ تم تنظيف وحذف الأقواس الزائدة المكسورة من هنا بالظبط ليعمل الـ Compile بنجاح
 
 function isValidCell(x: unknown): x is Cell {
   return !!x && typeof x === "object" && typeof (x as Cell).v === "string" && typeof (x as Cell).c === "number";
@@ -172,7 +171,7 @@ function parseResponse(status: number, bodyText: string): { ok: true; rows: Flex
   let json: any;
   try { json = JSON.parse(bodyText); } catch { return { ok: false, error: "GitHub Models returned invalid JSON." }; }
   const content: string = json?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-if (!content) return { ok: false, error: "Google AI returned empty response." };
+  if (!content) return { ok: false, error: "Google AI returned empty response." };
   const cleaned = content.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
   let parsed: unknown;
   try { parsed = JSON.parse(cleaned); } catch { return { ok: false, error: "AI returned an unparseable response." }; }
