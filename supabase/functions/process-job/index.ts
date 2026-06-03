@@ -2,12 +2,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const GITHUB_TOKEN = (Deno.env.get("GITHUB_TOKEN") || "").trim();
-
-const GITHUB_MODELS_API = "https://models.inference.ai.azure.com";
-const TEXT_MODEL = "gpt-4o-mini";
-const VISION_MODEL = "gpt-4o";
-const TIMEOUT_MS = 300_000;
+const GOOGLE_API_KEY = (Deno.env.get("GOOGLE_API_KEY") || "").trim();
+const GOOGLE_API = "https://generativelanguage.googleapis.com/v1beta/models";
+const TEXT_MODEL = "gemini-2.0-flash";
+const VISION_MODEL = "gemini-2.0-flash";
 const MAX_TOKENS = 16000;
 const CHUNK_SIZE = 20000;
 const CHUNK_OVERLAP = 500;
@@ -37,22 +35,44 @@ EXAMPLE: An invoice with 3 services → 3 line item rows + 1 TOTAL row = 4 rows 
 
 const USER_SUFFIX = `\n\nReturn a JSON ARRAY. Extract EVERY line item as a separate row, plus a TOTAL summary row per invoice. Do not drop rows, do not invent fields, copy values character-by-character.`;
 
-async function callGitHubModels(model: string, messages: unknown[]): Promise<{ status: number; bodyText: string }> {
+async function callGoogleAI(model: string, messages: unknown[]): Promise<{ status: number; bodyText: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  try {
-    const res = await fetch(`${GITHUB_MODELS_API}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${GITHUB_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      signal: controller.signal,
-      body: JSON.stringify({ model, messages, temperature: 0.0, max_tokens: MAX_TOKENS }),
+
+  const contents = (messages as any[]).map((msg: any) => {
+    if (typeof msg.content === "string") {
+      return { role: msg.role === "assistant" ? "model" : "user", parts: [{ text: msg.content }] };
+    }
+    const parts = msg.content.map((p: any) => {
+      if (p.type === "text") return { text: p.text };
+      if (p.type === "image_url") {
+        const [header, base64] = p.image_url.url.split(",");
+        const mimeType = header.match(/data:(.*);base64/)?.[1] || "image/jpeg";
+        return { inlineData: { mimeType, data: base64 } };
+      }
+      return { text: "" };
     });
+    return { role: "user", parts };
+  });
+
+  try {
+    const res = await fetch(
+      `${GOOGLE_API}/${model}:generateContent?key=${GOOGLE_API_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          contents,
+          generationConfig: { temperature: 0.0, maxOutputTokens: MAX_TOKENS },
+        }),
+      }
+    );
     return { status: res.status, bodyText: await res.text() };
   } finally {
     clearTimeout(timer);
+  }
+}
   }
 }
 
@@ -151,8 +171,8 @@ function parseResponse(status: number, bodyText: string): { ok: true; rows: Flex
   if (status !== 200) return null;
   let json: any;
   try { json = JSON.parse(bodyText); } catch { return { ok: false, error: "GitHub Models returned invalid JSON." }; }
-  const content: string = json?.choices?.[0]?.message?.content ?? "";
-  if (!content) return { ok: false, error: "GitHub Models returned empty response." };
+  const content: string = json?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+if (!content) return { ok: false, error: "Google AI returned empty response." };
   const cleaned = content.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
   let parsed: unknown;
   try { parsed = JSON.parse(cleaned); } catch { return { ok: false, error: "AI returned an unparseable response." }; }
@@ -165,7 +185,7 @@ async function runWithRetry(model: string, messages: unknown[]): Promise<{ ok: t
   let lastError = "Unknown error";
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const { status, bodyText } = await callGitHubModels(model, messages);
+      const { status, bodyText } = await callGoogleAI(model, messages);
       if (status === 200) {
         const result = parseResponse(status, bodyText);
         return result ?? { ok: false, error: "Failed to parse response." };
