@@ -128,10 +128,11 @@ function parseResponse(status: number, bodyText: string): { ok: true; rows: Flex
   let parsed: unknown;
   try { parsed = JSON.parse(cleaned); } catch { return { ok: false, error: "AI returned an unparseable response." }; }
   
-  // Handle both single object and array
+  // Handle both single object and array, normalizing field names to the
+  // 6 canonical fields the UI expects.
   const arr = Array.isArray(parsed) ? parsed : [parsed];
-  const rows = arr.filter(isValidRow) as FlexibleRow[];
-  
+  const rows = arr.map(normalizeRow).filter((r): r is FlexibleRow => r !== null);
+
   if (rows.length === 0) return { ok: false, error: "AI response missing data. Please retry." };
   return { ok: true, rows };
 }
