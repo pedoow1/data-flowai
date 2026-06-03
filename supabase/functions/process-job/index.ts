@@ -6,11 +6,11 @@ const GOOGLE_API_KEY = (Deno.env.get("GOOGLE_API_KEY") || "").trim();
 const GOOGLE_API = "https://generativelanguage.googleapis.com/v1beta/models";
 const TEXT_MODEL = "gemini-3.5-flash";
 const VISION_MODEL = "gemini-3.5-flash";
-const MAX_TOKENS = 250000;
-const CHUNK_SIZE = 20000;
+const MAX_TOKENS = 8000;
+const CHUNK_SIZE = 12000;
 const CHUNK_OVERLAP = 500;
-const PARALLEL_LIMIT = 12;      // ← غيّره لـ 8
-const BATCH_DELAY_MS = 100;    // ← غيّره لـ 100
+const PARALLEL_LIMIT = 10;      // ← غيّره لـ 8
+const BATCH_DELAY_MS = 1000;    // ← غيّره لـ 100
 const TIMEOUT_MS = 400000; // ✅ تم إضافة المتغير هنا لمنع ضرب الـ ReferenceError
 
 const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
