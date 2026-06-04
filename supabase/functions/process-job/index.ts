@@ -6,9 +6,9 @@ const GOOGLE_API_KEY = (Deno.env.get("GOOGLE_API_KEY") || "").trim();
 const GOOGLE_API = "https://generativelanguage.googleapis.com/v1beta/models";
 const TEXT_MODEL = "gemini-3.5-flash";
 const VISION_MODEL = "gemini-3.5-flash";
-const MAX_OUTPUT_TOKENS = 8192;
-const DEFAULT_CHUNK_SIZE = 12_000;
-const LARGE_DOC_CHUNK_SIZE = 9_000;
+const MAX_OUTPUT_TOKENS = 250000;
+const DEFAULT_CHUNK_SIZE = 20_000;
+const LARGE_DOC_CHUNK_SIZE = 15_000;
 const CHUNK_OVERLAP = 350;
 const REQUEST_TIMEOUT_MS = 75_000;
 const PROGRESS_START = 12;
@@ -59,7 +59,7 @@ function chooseStrategy(textLength: number) {
   return {
     chunkSize: large ? LARGE_DOC_CHUNK_SIZE : DEFAULT_CHUNK_SIZE,
     parallelLimit: large ? 2 : 3,
-    batchDelayMs: large ? 600 : 250,
+    batchDelayMs: large ? 2_000 : 1_500,
   };
 }
 
