@@ -19,14 +19,20 @@ export type Database = {
           attempts: number
           completed_at: string | null
           created_at: string
+          current_stage: string | null
           error: string | null
+          eta_seconds: number | null
           file_name: string | null
           id: string
           input: Json
+          last_heartbeat: string | null
           max_attempts: number
           output: Json | null
+          processed_chunks: number
+          progress: number
           started_at: string | null
           status: Database["public"]["Enums"]["job_status"]
+          total_chunks: number
           type: string
           updated_at: string
           user_id: string
@@ -35,14 +41,20 @@ export type Database = {
           attempts?: number
           completed_at?: string | null
           created_at?: string
+          current_stage?: string | null
           error?: string | null
+          eta_seconds?: number | null
           file_name?: string | null
           id?: string
           input: Json
+          last_heartbeat?: string | null
           max_attempts?: number
           output?: Json | null
+          processed_chunks?: number
+          progress?: number
           started_at?: string | null
           status?: Database["public"]["Enums"]["job_status"]
+          total_chunks?: number
           type?: string
           updated_at?: string
           user_id: string
@@ -51,14 +63,20 @@ export type Database = {
           attempts?: number
           completed_at?: string | null
           created_at?: string
+          current_stage?: string | null
           error?: string | null
+          eta_seconds?: number | null
           file_name?: string | null
           id?: string
           input?: Json
+          last_heartbeat?: string | null
           max_attempts?: number
           output?: Json | null
+          processed_chunks?: number
+          progress?: number
           started_at?: string | null
           status?: Database["public"]["Enums"]["job_status"]
+          total_chunks?: number
           type?: string
           updated_at?: string
           user_id?: string
