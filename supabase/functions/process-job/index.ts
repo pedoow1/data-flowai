@@ -59,7 +59,7 @@ function chooseStrategy(textLength: number) {
   return {
     chunkSize: large ? LARGE_DOC_CHUNK_SIZE : DEFAULT_CHUNK_SIZE,
     parallelLimit: large ? 2 : 3,
-    batchDelayMs: large ? 3_000 : 1_500,
+    batchDelayMs: large ? 5_000 : 2_500,
   };
 }
 
