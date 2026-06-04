@@ -10,12 +10,26 @@ import { UpgradeModal } from "@/components/UpgradeModal";
 import { PdfPreview } from "@/components/PdfPreview";
 import { HelpButton } from "@/components/HelpButton";
 import { useAuth } from "@/lib/auth";
-import { createExtractionJob, getJobStatus, type ExtractionRow, type JobStatusResponse } from "@/lib/jobs.functions";
+import {
+  createExtractionJob,
+  getJobStatus,
+  type ExtractionRow,
+  type JobStatusResponse,
+} from "@/lib/jobs.functions";
 import { extractPdfText, pdfPageToImageDataUrl, imageFileToDataUrl } from "@/lib/pdf";
 import { getMyUsage, recordUpload, setAdminPlan } from "@/lib/usage.functions";
 import { exportJSON, exportCSV, exportXLSX } from "@/lib/exporters";
 import { track, identify } from "@/lib/analytics";
-import { History, Settings, Gauge, Zap, Sparkles, Trash2, FileText, AlertTriangle } from "lucide-react";
+import {
+  History,
+  Settings,
+  Gauge,
+  Zap,
+  Sparkles,
+  Trash2,
+  FileText,
+  AlertTriangle,
+} from "lucide-react";
 
 export const Route = createFileRoute("/dashboard")({
   head: () => ({ meta: [{ title: "Dashboard — DataFlow AI" }] }),
@@ -37,9 +51,9 @@ type JobProgressState = {
 // 1 token ≈ 4 characters (conservative estimate)
 // Model limit: 16,384 tokens
 // Reserve ~3,500 for output → safe input: ~12,800 tokens (~51,200 chars)
-const SAFE_CHAR_LIMIT = 50_000;      // ~12,500 tokens - safe for chunking
-const WARN_CHAR_LIMIT = 100_000;     // ~25,000 tokens - large document warning
-const MAX_CHAR_LIMIT = 6_000_000;    // ~1.5M tokens - absolute maximum
+const SAFE_CHAR_LIMIT = 50_000; // ~12,500 tokens - safe for chunking
+const WARN_CHAR_LIMIT = 100_000; // ~25,000 tokens - large document warning
+const MAX_CHAR_LIMIT = 6_000_000; // ~1.5M tokens - absolute maximum
 
 type Usage = {
   plan: "free" | "pro" | "team";
@@ -55,7 +69,11 @@ type Usage = {
 };
 
 function loadHistory(): ExtractedRow[] {
-  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); } catch { return []; }
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+  } catch {
+    return [];
+  }
 }
 function saveHistory(rows: ExtractedRow[]) {
   localStorage.setItem(HISTORY_KEY, JSON.stringify(rows.slice(0, 200)));
@@ -69,32 +87,32 @@ function estimateTokens(text: string): number {
 // ── Client-side error extraction ────────────────────────────────────────────
 function extractClientError(error: any): string {
   if (!error) return "Unknown error occurred";
-  
+
   // Handle Error objects
   if (error instanceof Error) {
     return error.message;
   }
-  
+
   // Handle string errors
   if (typeof error === "string") {
     return error;
   }
-  
+
   // Handle Response/fetch errors
   if (error?.message) {
     return String(error.message);
   }
-  
+
   // Handle JSON error responses
   if (error?.error && typeof error.error === "string") {
     return error.error;
   }
-  
+
   // Handle nested error messages
   if (error?.data?.error) {
     return String(error.data.error);
   }
-  
+
   // Fallback to JSON stringification for debugging
   try {
     return JSON.stringify(error).slice(0, 300);
@@ -119,7 +137,13 @@ function Dashboard() {
   const [scanning, setScanning] = useState(false);
   const [upgrade, setUpgrade] = useState(false);
   const [tab, setTab] = useState<Tab>("extract");
-  const [usage, setUsage] = useState<Usage>({ plan: "free", used: 0, limit: 2, remaining: 2, unlimited: false });
+  const [usage, setUsage] = useState<Usage>({
+    plan: "free",
+    used: 0,
+    limit: 2,
+    remaining: 2,
+    unlimited: false,
+  });
   const [lastFile, setLastFile] = useState<File | null>(null);
   const [jobProgress, setJobProgress] = useState<JobProgressState>({
     progress: 0,
@@ -129,11 +153,11 @@ function Dashboard() {
     etaSeconds: null,
     lastHeartbeat: null,
   });
-  const createJob     = useServerFn(createExtractionJob);
-  const pollJob       = useServerFn(getJobStatus);
-  const fetchUsage    = useServerFn(getMyUsage);
-  const logUpload     = useServerFn(recordUpload);
-  const changePlan    = useServerFn(setAdminPlan);
+  const createJob = useServerFn(createExtractionJob);
+  const pollJob = useServerFn(getJobStatus);
+  const fetchUsage = useServerFn(getMyUsage);
+  const logUpload = useServerFn(recordUpload);
+  const changePlan = useServerFn(setAdminPlan);
 
   // Creates a background extraction job and polls until it finishes.
   // The heavy AI work runs in a Supabase Edge Function, so this never blocks
@@ -143,7 +167,11 @@ function Dashboard() {
       | { kind: "text"; text: string; fileName: string }
       | { kind: "image"; imageDataUrl: string; fileName: string },
   ): Promise<{ ok: false; error: string } | { ok: true; rows: ExtractionRow[] }> => {
-    const created = (await createJob({ data: input })) as { ok: boolean; jobId?: string; error?: string };
+    const created = (await createJob({ data: input })) as {
+      ok: boolean;
+      jobId?: string;
+      error?: string;
+    };
     if (!created.ok || !created.jobId) {
       return { ok: false, error: created.error || "Failed to start extraction." };
     }
@@ -172,15 +200,23 @@ function Dashboard() {
         stalePolls = 0;
       }
       if (stalePolls >= 2) {
-        return { ok: false, error: "The background extraction stopped responding. Please retry the file." };
+        return {
+          ok: false,
+          error: "The background extraction stopped responding. Please retry the file.",
+        };
       }
       if (s.status === "completed") {
-        if (!s.rows.length) return { ok: false, error: "No data could be extracted from this document." };
+        if (!s.rows.length)
+          return { ok: false, error: "No data could be extracted from this document." };
         return { ok: true, rows: s.rows };
       }
       if (s.status === "failed") return { ok: false, error: s.error || "Extraction failed." };
     }
-    return { ok: false, error: "This document is taking too long to process in the background. Please retry with a smaller file or scan fewer pages." };
+    return {
+      ok: false,
+      error:
+        "This document is taking too long to process in the background. Please retry with a smaller file or scan fewer pages.",
+    };
   };
 
   const refreshUsage = useCallback(async () => {
@@ -193,7 +229,9 @@ function Dashboard() {
     }
   }, [fetchUsage]);
 
-  useEffect(() => { setHistory(loadHistory()); }, []);
+  useEffect(() => {
+    setHistory(loadHistory());
+  }, []);
   useEffect(() => {
     if (!email) return;
     identify(email);
@@ -237,13 +275,15 @@ function Dashboard() {
       if (isImage) {
         // ── Image file → vision model directly ──
         toast.info("Processing image…");
-          setJobProgress((prev) => ({ ...prev, currentStage: "Preparing image", progress: 8 }));
+        setJobProgress((prev) => ({ ...prev, currentStage: "Preparing image", progress: 8 }));
         try {
           const imageDataUrl = await imageFileToDataUrl(file);
           // ✅ Check if data URL is too large (estimate: 4/3 for base64 encoding)
           const estimatedDataUrlSize = imageDataUrl.length;
           if (estimatedDataUrlSize > 20_000_000) {
-            throw new Error("Image too large to process. Please use a smaller image (max ~15MB effective).");
+            throw new Error(
+              "Image too large to process. Please use a smaller image (max ~15MB effective).",
+            );
           }
           res = await runJob({ kind: "image", imageDataUrl, fileName: file.name });
         } catch (e) {
@@ -254,14 +294,16 @@ function Dashboard() {
       } else {
         // ── PDF → try text first, fall back to vision if scanned ──
         toast.info("Extracting text from PDF…");
-          setJobProgress((prev) => ({ ...prev, currentStage: "Reading PDF pages", progress: 10 }));
+        setJobProgress((prev) => ({ ...prev, currentStage: "Reading PDF pages", progress: 10 }));
         let extracted: { text: string; pages: number };
         try {
           extracted = await extractPdfText(file);
         } catch (e) {
           const msg = extractClientError(e);
           console.error("[dashboard] PDF text extraction failed:", msg);
-          throw new Error(msg || "Failed to extract PDF text. Try a simpler PDF or use the image mode.");
+          throw new Error(
+            msg || "Failed to extract PDF text. Try a simpler PDF or use the image mode.",
+          );
         }
 
         pages = extracted.pages;
@@ -274,10 +316,14 @@ function Dashboard() {
           const imageDataUrl = await pdfPageToImageDataUrl(file, 1);
           res = await runJob({ kind: "image", imageDataUrl, fileName: file.name });
         } else if (charCount > MAX_CHAR_LIMIT) {
-          throw new Error(`Document text too large (${charCount.toLocaleString()} characters, ~${tokenEstimate.toLocaleString()} tokens). Maximum is 6M characters (~1.5M tokens).`);
+          throw new Error(
+            `Document text too large (${charCount.toLocaleString()} characters, ~${tokenEstimate.toLocaleString()} tokens). Maximum is 6M characters (~1.5M tokens).`,
+          );
         } else if (charCount > WARN_CHAR_LIMIT) {
           // ✅ Warn about large documents but allow processing (chunking will handle it)
-          toast.warning(`Large document: ${charCount.toLocaleString()} chars (~${tokenEstimate.toLocaleString()} tokens). Processing in the background — this may take a little while.`);
+          toast.warning(
+            `Large document: ${charCount.toLocaleString()} chars (~${tokenEstimate.toLocaleString()} tokens). Processing in the background — this may take a little while.`,
+          );
           res = await runJob({ kind: "text", text: extracted.text, fileName: file.name });
 
           if (!res.ok && res.error === "__NEEDS_VISION__") {
@@ -297,7 +343,11 @@ function Dashboard() {
       }
 
       if (!res.ok) {
-        track("file_upload_failure", { reason: res.error, pages, duration_ms: Date.now() - started });
+        track("file_upload_failure", {
+          reason: res.error,
+          pages,
+          duration_ms: Date.now() - started,
+        });
         toast.error("Extraction failed", {
           description: res.error,
           action: { label: "Retry", onClick: () => runExtraction(file) },
@@ -333,7 +383,9 @@ function Dashboard() {
       saveHistory(newHistory);
 
       track("file_upload_success", { pages, duration_ms: Date.now() - started });
-      toast.success("Extraction complete", { description: `${file.name} processed in ${((Date.now() - started) / 1000).toFixed(1)}s` });
+      toast.success("Extraction complete", {
+        description: `${file.name} processed in ${((Date.now() - started) / 1000).toFixed(1)}s`,
+      });
       setJobProgress({
         progress: 100,
         currentStage: "Completed",
@@ -343,8 +395,14 @@ function Dashboard() {
         lastHeartbeat: new Date().toISOString(),
       });
 
-      if (!recorded.usage.unlimited && recorded.usage.remaining > 0 && recorded.usage.remaining <= 10) {
-        toast.warning(`You have ${recorded.usage.remaining} upload${recorded.usage.remaining === 1 ? "" : "s"} remaining`);
+      if (
+        !recorded.usage.unlimited &&
+        recorded.usage.remaining > 0 &&
+        recorded.usage.remaining <= 10
+      ) {
+        toast.warning(
+          `You have ${recorded.usage.remaining} upload${recorded.usage.remaining === 1 ? "" : "s"} remaining`,
+        );
       }
     } catch (e: unknown) {
       const error = extractClientError(e);
@@ -363,13 +421,18 @@ function Dashboard() {
   const onFiles = async (files: File[]) => {
     if (files.length === 0) return;
     if (files.length > 1) {
-      toast.info("Processing the most recent file", { description: "Side-by-side preview supports one document at a time." });
+      toast.info("Processing the most recent file", {
+        description: "Side-by-side preview supports one document at a time.",
+      });
     }
     await runExtraction(files[files.length - 1]);
   };
 
   const onExport = (fmt: "json" | "csv" | "xlsx", source: ExtractedRow[] = rows) => {
-    if (source.length === 0) { toast.error("Nothing to export"); return; }
+    if (source.length === 0) {
+      toast.error("Nothing to export");
+      return;
+    }
     if (fmt === "json") exportJSON(source);
     if (fmt === "csv") exportCSV(source);
     if (fmt === "xlsx") exportXLSX(source);
@@ -387,15 +450,25 @@ function Dashboard() {
       <Header />
       <main className="flex-1 mx-auto max-w-7xl px-4 sm:px-6 py-6 sm:py-8 w-full">
         <div className="grid lg:grid-cols-[260px_1fr] gap-6">
-          <Sidebar usage={usage} onUpgrade={() => setUpgrade(true)} tab={tab} setTab={setTab} isAdmin={isAdmin} />
+          <Sidebar
+            usage={usage}
+            onUpgrade={() => setUpgrade(true)}
+            tab={tab}
+            setTab={setTab}
+            isAdmin={isAdmin}
+          />
 
           <div className="min-w-0">
             {tab === "extract" && (
               <>
                 <div className="flex flex-wrap items-end justify-between gap-3 mb-6">
                   <div>
-                    <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Extract documents</h1>
-                    <p className="text-muted-foreground text-sm mt-1">Drop a PDF — your data never leaves your browser unencrypted.</p>
+                    <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
+                      Extract documents
+                    </h1>
+                    <p className="text-muted-foreground text-sm mt-1">
+                      Drop a PDF — your data never leaves your browser unencrypted.
+                    </p>
                   </div>
                 </div>
 
@@ -415,13 +488,24 @@ function Dashboard() {
                         fileName={currentFile?.name ?? null}
                       />
                     ) : rows.length > 0 ? (
-                      <AuditTable rows={rows} setRows={setRows} onExport={(f) => onExport(f, rows)} locked={false} plan={usage.plan} />
+                      <AuditTable
+                        rows={rows}
+                        setRows={setRows}
+                        onExport={(f) => onExport(f, rows)}
+                        locked={false}
+                        plan={usage.plan}
+                      />
                     ) : (
                       <div className="glass rounded-2xl h-[480px] lg:h-[640px] flex flex-col items-center justify-center text-center p-8">
                         <Sparkles className="h-10 w-10 text-muted-foreground mb-3" />
-                        <p className="text-sm text-muted-foreground">Extracted data will appear here as an editable table.</p>
+                        <p className="text-sm text-muted-foreground">
+                          Extracted data will appear here as an editable table.
+                        </p>
                         {lastFile && !currentFile && (
-                          <button onClick={() => runExtraction(lastFile)} className="mt-4 text-xs px-3 py-1.5 rounded-lg bg-lime text-primary-foreground font-medium">
+                          <button
+                            onClick={() => runExtraction(lastFile)}
+                            className="mt-4 text-xs px-3 py-1.5 rounded-lg bg-lime text-primary-foreground font-medium"
+                          >
                             Retry last file
                           </button>
                         )}
@@ -433,7 +517,12 @@ function Dashboard() {
             )}
 
             {tab === "history" && (
-              <HistoryView history={history} onClear={clearHistory} onExport={(f) => onExport(f, history)} plan={usage.plan} />
+              <HistoryView
+                history={history}
+                onClear={clearHistory}
+                onExport={(f) => onExport(f, history)}
+                plan={usage.plan}
+              />
             )}
 
             {tab === "settings" && (
@@ -443,7 +532,10 @@ function Dashboard() {
                 usage={usage}
                 onUpgrade={() => setUpgrade(true)}
                 onPlanChange={async (plan) => {
-                  const res = await changePlan({ data: { plan } }) as { ok: boolean; error?: string };
+                  const res = (await changePlan({ data: { plan } })) as {
+                    ok: boolean;
+                    error?: string;
+                  };
                   if (!res.ok) throw new Error(res.error ?? "Server error");
                   await refreshUsage();
                 }}
@@ -460,17 +552,38 @@ function Dashboard() {
   );
 }
 
-function Sidebar({ usage, onUpgrade, tab, setTab, isAdmin }: {
-  usage: Usage; onUpgrade: () => void; tab: Tab; setTab: (t: Tab) => void; isAdmin: boolean;
+function Sidebar({
+  usage,
+  onUpgrade,
+  tab,
+  setTab,
+  isAdmin,
+}: {
+  usage: Usage;
+  onUpgrade: () => void;
+  tab: Tab;
+  setTab: (t: Tab) => void;
+  isAdmin: boolean;
 }) {
   const pct = usage.unlimited ? 0 : Math.min(100, (usage.used / Math.max(1, usage.limit)) * 100);
-  const usageHeading = usage.cycle === "monthly" ? "Monthly usage" : usage.cycle === "lifetime" ? "Plan usage" : "Daily usage";
-  const remainingLabel = usage.cycle === "monthly" ? "this billing month" : usage.cycle === "lifetime" ? "on this free plan" : "today";
-  const subtitle = usage.cycle === "monthly"
-    ? `You have ${usage.remaining} upload${usage.remaining === 1 ? "" : "s"} remaining ${remainingLabel}`
-    : usage.cycle === "lifetime"
-      ? `You have ${usage.remaining} free extraction${usage.remaining === 1 ? "" : "s"} remaining`
-      : `You have ${usage.remaining} upload${usage.remaining === 1 ? "" : "s"} remaining ${remainingLabel}`;
+  const usageHeading =
+    usage.cycle === "monthly"
+      ? "Monthly usage"
+      : usage.cycle === "lifetime"
+        ? "Plan usage"
+        : "Daily usage";
+  const remainingLabel =
+    usage.cycle === "monthly"
+      ? "this billing month"
+      : usage.cycle === "lifetime"
+        ? "on this free plan"
+        : "today";
+  const subtitle =
+    usage.cycle === "monthly"
+      ? `You have ${usage.remaining} upload${usage.remaining === 1 ? "" : "s"} remaining ${remainingLabel}`
+      : usage.cycle === "lifetime"
+        ? `You have ${usage.remaining} free extraction${usage.remaining === 1 ? "" : "s"} remaining`
+        : `You have ${usage.remaining} upload${usage.remaining === 1 ? "" : "s"} remaining ${remainingLabel}`;
   const usageDenominator = usage.unlimited ? "∞" : String(usage.limit);
   const items: { id: Tab; i: React.ReactNode; t: string }[] = [
     { id: "extract", i: <Gauge className="h-4 w-4" />, t: "Extract" },
@@ -491,21 +604,29 @@ function Sidebar({ usage, onUpgrade, tab, setTab, isAdmin }: {
             <span className="text-muted-foreground text-sm">/ {usageDenominator}</span>
           </div>
           <div className="mt-3 h-1.5 bg-white/5 rounded-full overflow-hidden">
-            <div className={`h-full transition-all ${warning ? "bg-yellow-400" : "bg-lime"}`} style={{ width: `${pct}%` }} />
+            <div
+              className={`h-full transition-all ${warning ? "bg-yellow-400" : "bg-lime"}`}
+              style={{ width: `${pct}%` }}
+            />
           </div>
-          <p className={`mt-2 text-xs flex items-center gap-1 ${warning ? "text-yellow-400" : "text-muted-foreground"}`}>
+          <p
+            className={`mt-2 text-xs flex items-center gap-1 ${warning ? "text-yellow-400" : "text-muted-foreground"}`}
+          >
             {warning && <AlertTriangle className="h-3 w-3" />}
             {subtitle}
           </p>
         </>
         {!isAdmin && usage.plan !== "team" && (
-          <button onClick={onUpgrade} className="mt-4 w-full inline-flex items-center justify-center gap-1.5 text-xs font-semibold bg-lime text-primary-foreground py-2 rounded-lg hover:opacity-90">
+          <button
+            onClick={onUpgrade}
+            className="mt-4 w-full inline-flex items-center justify-center gap-1.5 text-xs font-semibold bg-lime text-primary-foreground py-2 rounded-lg hover:opacity-90"
+          >
             <Zap className="h-3.5 w-3.5" /> Upgrade
           </button>
         )}
       </div>
       <nav className="glass rounded-2xl p-2 text-sm">
-        {items.map(it => (
+        {items.map((it) => (
           <button
             key={it.id}
             onClick={() => setTab(it.id)}
@@ -515,7 +636,10 @@ function Sidebar({ usage, onUpgrade, tab, setTab, isAdmin }: {
           </button>
         ))}
         {isAdmin && (
-          <Link to="/admin" className="w-full text-left flex items-center gap-2.5 px-3 py-2 rounded-lg text-lime hover:bg-white/[0.02]">
+          <Link
+            to="/admin"
+            className="w-full text-left flex items-center gap-2.5 px-3 py-2 rounded-lg text-lime hover:bg-white/[0.02]"
+          >
             <Sparkles className="h-4 w-4" /> Admin Analytics
           </Link>
         )}
@@ -524,18 +648,31 @@ function Sidebar({ usage, onUpgrade, tab, setTab, isAdmin }: {
   );
 }
 
-function HistoryView({ history, onClear, onExport, plan }: {
-  history: ExtractedRow[]; onClear: () => void; onExport: (f: "json" | "csv" | "xlsx") => void; plan: "free" | "pro" | "team";
+function HistoryView({
+  history,
+  onClear,
+  onExport,
+  plan,
+}: {
+  history: ExtractedRow[];
+  onClear: () => void;
+  onExport: (f: "json" | "csv" | "xlsx") => void;
+  plan: "free" | "pro" | "team";
 }) {
   return (
     <>
       <div className="flex flex-wrap items-end justify-between gap-3 mb-6">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">History</h1>
-          <p className="text-muted-foreground text-sm mt-1">{history.length} record{history.length === 1 ? "" : "s"} stored locally on this device.</p>
+          <p className="text-muted-foreground text-sm mt-1">
+            {history.length} record{history.length === 1 ? "" : "s"} stored locally on this device.
+          </p>
         </div>
         {history.length > 0 && (
-          <button onClick={onClear} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-white/5">
+          <button
+            onClick={onClear}
+            className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-white/5"
+          >
             <Trash2 className="h-3.5 w-3.5" /> Clear history
           </button>
         )}
@@ -543,17 +680,34 @@ function HistoryView({ history, onClear, onExport, plan }: {
       {history.length === 0 ? (
         <div className="glass rounded-2xl p-12 text-center">
           <FileText className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
-          <p className="text-sm text-muted-foreground">No extractions yet. Process a document to populate your history.</p>
+          <p className="text-sm text-muted-foreground">
+            No extractions yet. Process a document to populate your history.
+          </p>
         </div>
       ) : (
-        <AuditTable rows={history} setRows={() => {}} onExport={onExport} locked={false} plan={plan} />
+        <AuditTable
+          rows={history}
+          setRows={() => {}}
+          onExport={onExport}
+          locked={false}
+          plan={plan}
+        />
       )}
     </>
   );
 }
 
-function SettingsView({ email, isAdmin, usage, onUpgrade, onPlanChange }: {
-  email: string | null; isAdmin: boolean; usage: Usage; onUpgrade: () => void;
+function SettingsView({
+  email,
+  isAdmin,
+  usage,
+  onUpgrade,
+  onPlanChange,
+}: {
+  email: string | null;
+  isAdmin: boolean;
+  usage: Usage;
+  onUpgrade: () => void;
   onPlanChange?: (plan: "free" | "pro" | "team") => Promise<void>;
 }) {
   const [changingPlan, setChangingPlan] = useState(false);
@@ -588,7 +742,9 @@ function SettingsView({ email, isAdmin, usage, onUpgrade, onPlanChange }: {
 
         {isAdmin && (
           <Card title="Admin — Switch Plan">
-            <p className="text-xs text-muted-foreground mb-3">Switch your active plan to simulate each customer tier exactly as it behaves.</p>
+            <p className="text-xs text-muted-foreground mb-3">
+              Switch your active plan to simulate each customer tier exactly as it behaves.
+            </p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               {(["free", "pro", "team"] as const).map((p) => (
                 <button
@@ -608,12 +764,32 @@ function SettingsView({ email, isAdmin, usage, onUpgrade, onPlanChange }: {
           </Card>
         )}
 
-        <Card title={usage.cycle === "monthly" ? "Usage (current month)" : usage.cycle === "lifetime" ? "Usage (free plan)" : "Usage (last 24 hours)"}>
+        <Card
+          title={
+            usage.cycle === "monthly"
+              ? "Usage (current month)"
+              : usage.cycle === "lifetime"
+                ? "Usage (free plan)"
+                : "Usage (last 24 hours)"
+          }
+        >
           <Row label="Uploads used" value={String(usage.used)} />
           <Row label="Remaining" value={String(usage.remaining)} />
-          <Row label={usage.cycle === "monthly" ? "Monthly limit" : usage.cycle === "lifetime" ? "Free plan limit" : "Daily limit"} value={usage.unlimited ? "Unlimited" : String(usage.limit)} />
+          <Row
+            label={
+              usage.cycle === "monthly"
+                ? "Monthly limit"
+                : usage.cycle === "lifetime"
+                  ? "Free plan limit"
+                  : "Daily limit"
+            }
+            value={usage.unlimited ? "Unlimited" : String(usage.limit)}
+          />
           {!isAdmin && usage.plan !== "team" && (
-            <button onClick={onUpgrade} className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold bg-lime text-primary-foreground px-3 py-1.5 rounded-lg hover:opacity-90">
+            <button
+              onClick={onUpgrade}
+              className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold bg-lime text-primary-foreground px-3 py-1.5 rounded-lg hover:opacity-90"
+            >
               <Zap className="h-3.5 w-3.5" /> Upgrade for higher limits
             </button>
           )}
@@ -621,7 +797,8 @@ function SettingsView({ email, isAdmin, usage, onUpgrade, onPlanChange }: {
 
         <Card title="Data & Privacy">
           <p className="text-sm text-muted-foreground">
-            Your files are processed instantly and are never stored on our servers. We do not use your data to train our AI models. Extraction history is saved only in your browser.
+            Your files are processed instantly and are never stored on our servers. We do not use
+            your data to train our AI models. Extraction history is saved only in your browser.
           </p>
         </Card>
       </div>

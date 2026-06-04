@@ -15,7 +15,11 @@ const CreateJobSchema = z.object({
 const JobIdSchema = z.object({ jobId: z.string().uuid() });
 type JobLifecycleStatus = "pending" | "processing" | "completed" | "failed";
 
-async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
+async function assertWithinQuota(context: {
+  supabase: unknown;
+  userId: string;
+  claims: { email: string | null };
+}) {
   const isAdminEmail =
     typeof context.claims?.email === "string" &&
     context.claims.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
@@ -32,7 +36,7 @@ export const createExtractionJob = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => CreateJobSchema.parse(d))
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
-    const jobsTable = (supabase.from("jobs") as any);
+    const jobsTable = supabase.from("jobs") as any;
     const projectUrl = process.env.SUPABASE_URL;
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -124,9 +128,11 @@ export const getJobStatus = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => JobIdSchema.parse(d))
   .handler(async ({ data, context }) => {
     const { supabase } = context;
-    const jobsTable = (supabase.from("jobs") as any);
+    const jobsTable = supabase.from("jobs") as any;
     const { data: job, error } = await jobsTable
-      .select("status, output, error, progress, current_stage, processed_chunks, total_chunks, eta_seconds, last_heartbeat")
+      .select(
+        "status, output, error, progress, current_stage, processed_chunks, total_chunks, eta_seconds, last_heartbeat",
+      )
       .eq("id", data.jobId)
       .maybeSingle();
 
@@ -181,4 +187,3 @@ export const getJobStatus = createServerFn({ method: "POST" })
       lastHeartbeat: statusRow.last_heartbeat ?? null,
     } satisfies JobStatusResponse;
   });
-

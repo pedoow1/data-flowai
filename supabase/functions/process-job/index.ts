@@ -87,7 +87,10 @@ async function updateJob(jobId: string, patch: Record<string, unknown>) {
   if (error) console.error("[process-job] failed to update job", jobId, error.message);
 }
 
-async function callGoogleAI(model: string, messages: unknown[]): Promise<{ status: number; bodyText: string }> {
+async function callGoogleAI(
+  model: string,
+  messages: unknown[],
+): Promise<{ status: number; bodyText: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
@@ -128,7 +131,12 @@ async function callGoogleAI(model: string, messages: unknown[]): Promise<{ statu
 }
 
 function isValidCell(x: unknown): x is Cell {
-  return !!x && typeof x === "object" && typeof (x as Cell).v === "string" && typeof (x as Cell).c === "number";
+  return (
+    !!x &&
+    typeof x === "object" &&
+    typeof (x as Cell).v === "string" &&
+    typeof (x as Cell).c === "number"
+  );
 }
 
 function toCell(x: unknown): Cell | null {
@@ -144,26 +152,77 @@ function toCell(x: unknown): Cell | null {
 }
 
 const CANON: Record<string, string> = {
-  "invoice number": "invoiceNumber", "invoice no": "invoiceNumber", "invoice #": "invoiceNumber",
-  "invoice": "invoiceNumber", "invoicenumber": "invoiceNumber", "invoiceno": "invoiceNumber",
-  "invoice_number": "invoiceNumber", "receipt number": "invoiceNumber", "order number": "invoiceNumber",
-  "receipt": "invoiceNumber", "receipt no": "invoiceNumber", "order no": "invoiceNumber",
-  "bill number": "invoiceNumber", "doc number": "invoiceNumber",
-  "client": "client", "customer": "client", "bill to": "client", "billto": "client", "billed to": "client",
-  "buyer": "client", "client name": "client", "customer name": "client", "company": "client", "account": "client", "to": "client",
-  "vendor": "vendor", "seller": "vendor", "supplier": "vendor", "from": "vendor",
-  "date": "date", "invoice date": "date", "issue date": "date", "issued": "date",
-  "due date": "dueDate", "duedate": "dueDate", "payment due": "dueDate",
-  "amount": "amount", "subtotal": "amount", "sub total": "amount", "net amount": "amount", "net": "amount",
-  "tax": "tax", "vat": "tax", "gst": "tax", "tax amount": "tax", "sales tax": "tax",
-  "total": "total", "grand total": "total", "amount due": "total", "total amount": "total", "balance due": "total",
-  "po number": "poNumber", "po": "poNumber", "purchase order": "poNumber",
-  "reference": "reference", "ref": "reference", "reference_id": "reference",
-  "description": "description", "items": "description", "item": "description",
-  "quantity": "quantity", "qty": "quantity",
-  "unit price": "unitPrice", "price": "unitPrice", "rate": "unitPrice",
-  "payment terms": "paymentTerms", "terms": "paymentTerms",
-  "currency": "currency", "status": "status", "notes": "notes", "note": "notes",
+  "invoice number": "invoiceNumber",
+  "invoice no": "invoiceNumber",
+  "invoice #": "invoiceNumber",
+  invoice: "invoiceNumber",
+  invoicenumber: "invoiceNumber",
+  invoiceno: "invoiceNumber",
+  invoice_number: "invoiceNumber",
+  "receipt number": "invoiceNumber",
+  "order number": "invoiceNumber",
+  receipt: "invoiceNumber",
+  "receipt no": "invoiceNumber",
+  "order no": "invoiceNumber",
+  "bill number": "invoiceNumber",
+  "doc number": "invoiceNumber",
+  client: "client",
+  customer: "client",
+  "bill to": "client",
+  billto: "client",
+  "billed to": "client",
+  buyer: "client",
+  "client name": "client",
+  "customer name": "client",
+  company: "client",
+  account: "client",
+  to: "client",
+  vendor: "vendor",
+  seller: "vendor",
+  supplier: "vendor",
+  from: "vendor",
+  date: "date",
+  "invoice date": "date",
+  "issue date": "date",
+  issued: "date",
+  "due date": "dueDate",
+  duedate: "dueDate",
+  "payment due": "dueDate",
+  amount: "amount",
+  subtotal: "amount",
+  "sub total": "amount",
+  "net amount": "amount",
+  net: "amount",
+  tax: "tax",
+  vat: "tax",
+  gst: "tax",
+  "tax amount": "tax",
+  "sales tax": "tax",
+  total: "total",
+  "grand total": "total",
+  "amount due": "total",
+  "total amount": "total",
+  "balance due": "total",
+  "po number": "poNumber",
+  po: "poNumber",
+  "purchase order": "poNumber",
+  reference: "reference",
+  ref: "reference",
+  reference_id: "reference",
+  description: "description",
+  items: "description",
+  item: "description",
+  quantity: "quantity",
+  qty: "quantity",
+  "unit price": "unitPrice",
+  price: "unitPrice",
+  rate: "unitPrice",
+  "payment terms": "paymentTerms",
+  terms: "paymentTerms",
+  currency: "currency",
+  status: "status",
+  notes: "notes",
+  note: "notes",
 };
 
 function canonKey(k: string): string {
@@ -227,7 +286,10 @@ function dedupeRows(rows: FlexibleRow[]) {
   return out;
 }
 
-function parseResponse(status: number, bodyText: string): { ok: true; rows: FlexibleRow[] } | { ok: false; error: string } | null {
+function parseResponse(
+  status: number,
+  bodyText: string,
+): { ok: true; rows: FlexibleRow[] } | { ok: false; error: string } | null {
   if (status !== 200) return null;
 
   let json: any;
@@ -240,7 +302,12 @@ function parseResponse(status: number, bodyText: string): { ok: true; rows: Flex
   const content: string = json?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
   if (!content) return { ok: false, error: "Google AI returned an empty response." };
 
-  const cleaned = content.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
+  const cleaned = content
+    .trim()
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/i, "")
+    .trim();
   let parsed: unknown;
   try {
     parsed = JSON.parse(cleaned);
@@ -248,12 +315,17 @@ function parseResponse(status: number, bodyText: string): { ok: true; rows: Flex
     return { ok: false, error: "AI returned an unparseable response." };
   }
 
-  const rows = toRowArray(parsed).map(normalizeRow).filter((row): row is FlexibleRow => row !== null);
+  const rows = toRowArray(parsed)
+    .map(normalizeRow)
+    .filter((row): row is FlexibleRow => row !== null);
   if (rows.length === 0) return { ok: false, error: "AI response contained no usable rows." };
   return { ok: true, rows };
 }
 
-async function runWithRetry(model: string, messages: unknown[]): Promise<{ ok: true; rows: FlexibleRow[] } | { ok: false; error: string }> {
+async function runWithRetry(
+  model: string,
+  messages: unknown[],
+): Promise<{ ok: true; rows: FlexibleRow[] } | { ok: false; error: string }> {
   let lastError = "Unknown error";
 
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -265,7 +337,10 @@ async function runWithRetry(model: string, messages: unknown[]): Promise<{ ok: t
       }
 
       if ([429, 502, 503, 504, 524].includes(status)) {
-        lastError = status === 429 ? "Google AI quota or rate limit was reached." : "Google AI is temporarily unavailable.";
+        lastError =
+          status === 429
+            ? "Google AI quota or rate limit was reached."
+            : "Google AI is temporarily unavailable.";
         await wait((status === 429 ? 6_000 : 3_000) * attempt);
         continue;
       }
@@ -281,7 +356,7 @@ async function runWithRetry(model: string, messages: unknown[]): Promise<{ ok: t
       return { ok: false, error: `Google AI error (${status}).` };
     } catch (error: any) {
       const aborted = error?.name === "AbortError";
-      lastError = aborted ? "Google AI request timed out." : error?.message ?? "Network error";
+      lastError = aborted ? "Google AI request timed out." : (error?.message ?? "Network error");
       if (aborted) await wait(2_000 * attempt);
       else await wait(1_500 * attempt);
     }
@@ -321,7 +396,11 @@ function chunkText(text: string, size: number, overlap: number) {
   return chunks.length > 0 ? chunks : [sanitized];
 }
 
-async function extractFromText(jobId: string, text: string, fileName: string): Promise<ExtractionResult> {
+async function extractFromText(
+  jobId: string,
+  text: string,
+  fileName: string,
+): Promise<ExtractionResult> {
   const strategy = chooseStrategy(text.length);
   const chunks = chunkText(text, strategy.chunkSize, CHUNK_OVERLAP);
   const allRows: FlexibleRow[] = [];
@@ -386,7 +465,11 @@ async function extractFromText(jobId: string, text: string, fileName: string): P
   };
 }
 
-async function extractFromImage(jobId: string, imageDataUrl: string, fileName: string): Promise<ExtractionResult> {
+async function extractFromImage(
+  jobId: string,
+  imageDataUrl: string,
+  fileName: string,
+): Promise<ExtractionResult> {
   await updateJob(jobId, {
     current_stage: "Scanning image",
     progress: 35,
@@ -395,13 +478,18 @@ async function extractFromImage(jobId: string, imageDataUrl: string, fileName: s
     eta_seconds: 45,
   });
 
-  const messages = [{
-    role: "user",
-    content: [
-      { type: "image_url", image_url: { url: imageDataUrl } },
-      { type: "text", text: `${FLEXIBLE_PROMPT}\n\nDocument filename: ${fileName}${USER_SUFFIX}` },
-    ],
-  }];
+  const messages = [
+    {
+      role: "user",
+      content: [
+        { type: "image_url", image_url: { url: imageDataUrl } },
+        {
+          type: "text",
+          text: `${FLEXIBLE_PROMPT}\n\nDocument filename: ${fileName}${USER_SUFFIX}`,
+        },
+      ],
+    },
+  ];
 
   const result = await runWithRetry(VISION_MODEL, messages);
   if (!result.ok) return result;
@@ -434,10 +522,16 @@ async function processJob(jobId: string) {
       eta_seconds: null,
     });
 
-    const input = job.input as { kind: "text" | "image"; text?: string; imageDataUrl?: string; fileName: string };
-    const result = input.kind === "image"
-      ? await extractFromImage(jobId, input.imageDataUrl ?? "", input.fileName)
-      : await extractFromText(jobId, input.text ?? "", input.fileName);
+    const input = job.input as {
+      kind: "text" | "image";
+      text?: string;
+      imageDataUrl?: string;
+      fileName: string;
+    };
+    const result =
+      input.kind === "image"
+        ? await extractFromImage(jobId, input.imageDataUrl ?? "", input.fileName)
+        : await extractFromText(jobId, input.text ?? "", input.fileName);
 
     if (!result.ok) {
       await updateJob(jobId, {
