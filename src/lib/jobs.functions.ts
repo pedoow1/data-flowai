@@ -32,6 +32,7 @@ export const createExtractionJob = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => CreateJobSchema.parse(d))
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
+    const jobsTable = (supabase.from("jobs") as any);
     const projectUrl = process.env.SUPABASE_URL;
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -49,8 +50,7 @@ export const createExtractionJob = createServerFn({ method: "POST" })
     }
 
     // Insert the job (RLS: user_id must equal auth.uid()).
-    const { data: job, error } = await supabase
-      .from("jobs")
+    const { data: job, error } = await jobsTable
       .insert({
         user_id: userId,
         type: "extraction",
@@ -124,8 +124,8 @@ export const getJobStatus = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => JobIdSchema.parse(d))
   .handler(async ({ data, context }) => {
     const { supabase } = context;
-    const { data: job, error } = await supabase
-      .from("jobs")
+    const jobsTable = (supabase.from("jobs") as any);
+    const { data: job, error } = await jobsTable
       .select("status, output, error, progress, current_stage, processed_chunks, total_chunks, eta_seconds, last_heartbeat")
       .eq("id", data.jobId)
       .maybeSingle();
