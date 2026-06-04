@@ -177,9 +177,9 @@ export const getJobStatus = createServerFn({ method: "POST" })
       } satisfies JobStatusResponse;
     }
 
-    const output = (job.output as { rows?: ExtractionRow[] } | null) ?? null;
-    const statusRow = job as unknown as {
+    const statusRow = job as {
       status: JobLifecycleStatus;
+      output?: { rows?: ExtractionRow[] } | null;
       error: string | null;
       progress?: number | null;
       current_stage?: string | null;
@@ -188,6 +188,7 @@ export const getJobStatus = createServerFn({ method: "POST" })
       eta_seconds?: number | null;
       last_heartbeat?: string | null;
     };
+    const output = statusRow.output ?? null;
 
     return {
       status: statusRow.status,
