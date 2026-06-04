@@ -14,6 +14,20 @@ const CreateJobSchema = z.object({
 
 const JobIdSchema = z.object({ jobId: z.string().uuid() });
 type JobLifecycleStatus = "pending" | "processing" | "completed" | "failed";
+type CreateJobInsertResult = {
+  insert: (value: Record<string, unknown>) => {
+    select: (columns: string) => {
+      single: () => Promise<{ data: { id: string } | null; error: { message: string } | null }>;
+    };
+  };
+};
+type ReadJobStatusResult = {
+  select: (columns: string) => {
+    eq: (column: string, value: string) => {
+      maybeSingle: () => Promise<{ data: unknown; error: { message: string } | null }>;
+    };
+  };
+};
 
 async function assertWithinQuota(context: {
   supabase: unknown;
@@ -36,7 +50,7 @@ export const createExtractionJob = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => CreateJobSchema.parse(d))
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
-    const jobsTable = supabase.from("jobs") as any;
+    const jobsTable = supabase.from("jobs") as unknown as CreateJobInsertResult;
     const projectUrl = process.env.SUPABASE_URL;
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -128,7 +142,7 @@ export const getJobStatus = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => JobIdSchema.parse(d))
   .handler(async ({ data, context }) => {
     const { supabase } = context;
-    const jobsTable = supabase.from("jobs") as any;
+    const jobsTable = supabase.from("jobs") as unknown as ReadJobStatusResult;
     const { data: job, error } = await jobsTable
       .select(
         "status, output, error, progress, current_stage, processed_chunks, total_chunks, eta_seconds, last_heartbeat",
