@@ -87,7 +87,8 @@ function estimateTokens(text: string): number {
 // ── Client-side error extraction ────────────────────────────────────────────
 function extractClientError(error: unknown): string {
   if (!error) return "Unknown error occurred";
-  const maybeObject = typeof error === "object" && error !== null ? (error as Record<string, unknown>) : null;
+  const maybeObject =
+    typeof error === "object" && error !== null ? (error as Record<string, unknown>) : null;
   const maybeNestedData =
     maybeObject && typeof maybeObject.data === "object" && maybeObject.data !== null
       ? (maybeObject.data as Record<string, unknown>)

@@ -23,7 +23,10 @@ type CreateJobInsertResult = {
 };
 type ReadJobStatusResult = {
   select: (columns: string) => {
-    eq: (column: string, value: string) => {
+    eq: (
+      column: string,
+      value: string,
+    ) => {
       maybeSingle: () => Promise<{ data: unknown; error: { message: string } | null }>;
     };
   };
