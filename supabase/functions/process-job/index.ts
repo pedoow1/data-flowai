@@ -10,7 +10,7 @@ const MAX_OUTPUT_TOKENS = 250000;
 const DEFAULT_CHUNK_SIZE = 20_000;
 const LARGE_DOC_CHUNK_SIZE = 15_000;
 const CHUNK_OVERLAP = 350;
-const REQUEST_TIMEOUT_MS = 75_000;
+const REQUEST_TIMEOUT_MS = 120_000;
 const PROGRESS_START = 12;
 const PROGRESS_END = 96;
 
@@ -58,8 +58,8 @@ function chooseStrategy(textLength: number) {
   const large = textLength > 200_000;
   return {
     chunkSize: large ? LARGE_DOC_CHUNK_SIZE : DEFAULT_CHUNK_SIZE,
-    parallelLimit: large ? 2 : 3,
-    batchDelayMs: large ? 2_000 : 1_500,
+    parallelLimit: large ? 1 : 2,
+    batchDelayMs: large ? 5_000 : 3_000,
   };
 }
 
@@ -90,7 +90,7 @@ async function updateJob(jobId: string, patch: Record<string, unknown>) {
 async function callGoogleAI(
   model: string,
   messages: unknown[],
-): Promise<{ status: number; bodyText: string }> {
+): Promise<{ status: number; bodyText: string; retryAfterMs?: number }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
@@ -124,7 +124,12 @@ async function callGoogleAI(
         },
       }),
     });
-    return { status: res.status, bodyText: await res.text() };
+
+    // اقرأ retry-after header لو موجود
+    const retryAfterSec = parseInt(res.headers.get("retry-after") ?? "0");
+    const retryAfterMs = retryAfterSec > 0 ? retryAfterSec * 1000 : undefined;
+
+    return { status: res.status, bodyText: await res.text(), retryAfterMs };
   } finally {
     clearTimeout(timer);
   }
@@ -328,20 +333,29 @@ async function runWithRetry(
 ): Promise<{ ok: true; rows: FlexibleRow[] } | { ok: false; error: string }> {
   let lastError = "Unknown error";
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= 4; attempt++) {
     try {
-      const { status, bodyText } = await callGoogleAI(model, messages);
+      const { status, bodyText, retryAfterMs } = await callGoogleAI(model, messages);
+
       if (status === 200) {
         const result = parseResponse(status, bodyText);
         return result ?? { ok: false, error: "Failed to parse AI response." };
       }
 
-      if ([429, 502, 503, 504, 524].includes(status)) {
-        lastError =
-          status === 429
-            ? "Google AI quota or rate limit was reached."
-            : "Google AI is temporarily unavailable.";
-        await wait((status === 429 ? 6_000 : 3_000) * attempt);
+      if (status === 429) {
+        lastError = "Google AI quota or rate limit was reached.";
+        // احترم retry-after header لو موجود، غير كده استخدم exponential backoff
+        const delay = retryAfterMs
+          ? retryAfterMs + 1_000
+          : Math.min(15_000 * attempt, 60_000);
+        console.warn(`[process-job] 429 rate limit — waiting ${delay}ms before retry ${attempt}`);
+        await wait(delay);
+        continue;
+      }
+
+      if ([502, 503, 504, 524].includes(status)) {
+        lastError = "Google AI is temporarily unavailable.";
+        await wait(5_000 * attempt);
         continue;
       }
 
@@ -357,8 +371,8 @@ async function runWithRetry(
     } catch (error: any) {
       const aborted = error?.name === "AbortError";
       lastError = aborted ? "Google AI request timed out." : (error?.message ?? "Network error");
-      if (aborted) await wait(2_000 * attempt);
-      else await wait(1_500 * attempt);
+      const delay = aborted ? 8_000 * attempt : 3_000 * attempt;
+      await wait(delay);
     }
   }
 
