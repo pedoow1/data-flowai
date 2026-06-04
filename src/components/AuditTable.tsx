@@ -1,6 +1,17 @@
-import { Download, FileJson, FileSpreadsheet, Sparkles, Loader2, Lock } from "lucide-react";
+import {
+  Download,
+  FileJson,
+  FileSpreadsheet,
+  Sparkles,
+  Loader2,
+  Lock,
+  Clock3,
+  FileSearch,
+  Layers3,
+} from "lucide-react";
 import { isExportFormatAllowed, getExportFormatLabel, type ExportFormat } from "@/lib/exporters";
 import { toast } from "sonner";
+import { Progress } from "@/components/ui/progress";
 
 export type Cell = { v: string; c: number };
 
@@ -17,14 +28,38 @@ function isCell(x: unknown): x is Cell {
 
 // Human-friendly labels for known canonical keys; unknown keys are prettified.
 const LABELS: Record<string, string> = {
-  invoiceNumber: "Invoice #", client: "Client", vendor: "Vendor", date: "Date",
-  dueDate: "Due Date", amount: "Amount", tax: "Tax", total: "Total",
-  poNumber: "PO #", reference: "Reference", description: "Description",
-  quantity: "Qty", unitPrice: "Unit Price", paymentTerms: "Terms",
-  currency: "Currency", status: "Status", notes: "Notes",
+  invoiceNumber: "Invoice #",
+  client: "Client",
+  vendor: "Vendor",
+  date: "Date",
+  dueDate: "Due Date",
+  amount: "Amount",
+  tax: "Tax",
+  total: "Total",
+  poNumber: "PO #",
+  reference: "Reference",
+  description: "Description",
+  quantity: "Qty",
+  unitPrice: "Unit Price",
+  paymentTerms: "Terms",
+  currency: "Currency",
+  status: "Status",
+  notes: "Notes",
 };
 // Preferred column order; anything else is appended in first-seen order.
-const PRIORITY = ["invoiceNumber", "client", "vendor", "date", "dueDate", "description", "quantity", "unitPrice", "amount", "tax", "total"];
+const PRIORITY = [
+  "invoiceNumber",
+  "client",
+  "vendor",
+  "date",
+  "dueDate",
+  "description",
+  "quantity",
+  "unitPrice",
+  "amount",
+  "tax",
+  "total",
+];
 
 function prettify(key: string): string {
   if (LABELS[key]) return LABELS[key];
@@ -51,33 +86,51 @@ function columnKeys(rows: ExtractedRow[]): string[] {
 // Mock extractor — generates plausible data per uploaded file
 export function mockExtract(file: File): Promise<ExtractedRow> {
   return new Promise((res) => {
-    setTimeout(() => {
-      const clients = ["Acme Corp", "Globex Inc", "Initech LLC", "Stark Industries", "Wayne Enterprises", "Umbrella Co"];
-      const client = clients[Math.floor(Math.random() * clients.length)];
-      const num = `INV-${Math.floor(10000 + Math.random() * 90000)}`;
-      const amt = (Math.random() * 4000 + 200).toFixed(2);
-      const tax = (Number(amt) * 0.2).toFixed(2);
-      const total = (Number(amt) + Number(tax)).toFixed(2);
-      const conf = () => 70 + Math.floor(Math.random() * 30);
-      res({
-        id: crypto.randomUUID(),
-        fileName: file.name,
-        invoiceNumber: { v: num, c: conf() },
-        client: { v: client, c: conf() },
-        date: { v: new Date(Date.now() - Math.random() * 1e10).toISOString().slice(0, 10), c: conf() },
-        amount: { v: `$${amt}`, c: conf() },
-        tax: { v: `$${tax}`, c: conf() },
-        total: { v: `$${total}`, c: conf() },
-      });
-    }, 1200 + Math.random() * 1400);
+    setTimeout(
+      () => {
+        const clients = [
+          "Acme Corp",
+          "Globex Inc",
+          "Initech LLC",
+          "Stark Industries",
+          "Wayne Enterprises",
+          "Umbrella Co",
+        ];
+        const client = clients[Math.floor(Math.random() * clients.length)];
+        const num = `INV-${Math.floor(10000 + Math.random() * 90000)}`;
+        const amt = (Math.random() * 4000 + 200).toFixed(2);
+        const tax = (Number(amt) * 0.2).toFixed(2);
+        const total = (Number(amt) + Number(tax)).toFixed(2);
+        const conf = () => 70 + Math.floor(Math.random() * 30);
+        res({
+          id: crypto.randomUUID(),
+          fileName: file.name,
+          invoiceNumber: { v: num, c: conf() },
+          client: { v: client, c: conf() },
+          date: {
+            v: new Date(Date.now() - Math.random() * 1e10).toISOString().slice(0, 10),
+            c: conf(),
+          },
+          amount: { v: `$${amt}`, c: conf() },
+          tax: { v: `$${tax}`, c: conf() },
+          total: { v: `$${total}`, c: conf() },
+        });
+      },
+      1200 + Math.random() * 1400,
+    );
   });
 }
 
 function ConfBadge({ c }: { c: number }) {
-  const tone = c >= 90 ? "bg-lime/15 text-lime border-lime/30"
-             : c >= 70 ? "bg-yellow-500/10 text-yellow-400 border-yellow-500/30"
-             : "bg-red-500/10 text-red-400 border-red-500/30";
-  return <span className={`ml-2 text-[10px] font-mono px-1.5 py-0.5 rounded border ${tone}`}>{c}%</span>;
+  const tone =
+    c >= 90
+      ? "bg-lime/15 text-lime border-lime/30"
+      : c >= 70
+        ? "bg-yellow-500/10 text-yellow-400 border-yellow-500/30"
+        : "bg-red-500/10 text-red-400 border-red-500/30";
+  return (
+    <span className={`ml-2 text-[10px] font-mono px-1.5 py-0.5 rounded border ${tone}`}>{c}%</span>
+  );
 }
 
 function EditableCell({ cell, onChange }: { cell: Cell; onChange: (v: string) => void }) {
@@ -94,7 +147,11 @@ function EditableCell({ cell, onChange }: { cell: Cell; onChange: (v: string) =>
 }
 
 export function AuditTable({
-  rows, setRows, onExport, locked, plan = "free",
+  rows,
+  setRows,
+  onExport,
+  locked,
+  plan = "free",
 }: {
   rows: ExtractedRow[];
   setRows: (r: ExtractedRow[]) => void;
@@ -103,11 +160,13 @@ export function AuditTable({
   plan?: "free" | "pro" | "team";
 }) {
   const update = (id: string, key: string, v: string) => {
-    setRows(rows.map(r => {
-      if (r.id !== id) return r;
-      const prev = isCell(r[key]) ? (r[key] as Cell) : { v: "", c: 100 };
-      return { ...r, [key]: { ...prev, v, c: 100 } };
-    }));
+    setRows(
+      rows.map((r) => {
+        if (r.id !== id) return r;
+        const prev = isCell(r[key]) ? (r[key] as Cell) : { v: "", c: 100 };
+        return { ...r, [key]: { ...prev, v, c: 100 } };
+      }),
+    );
   };
 
   const cols = columnKeys(rows);
@@ -131,28 +190,33 @@ export function AuditTable({
       <div className="flex flex-wrap items-center justify-between gap-3 p-4 border-b border-border">
         <div className="flex items-center gap-2">
           <Sparkles className="h-4 w-4 text-lime" />
-          <h3 className="font-semibold text-sm">Extracted Data · <span className="text-muted-foreground font-normal">{rows.length} record{rows.length > 1 ? "s" : ""}</span></h3>
+          <h3 className="font-semibold text-sm">
+            Extracted Data ·{" "}
+            <span className="text-muted-foreground font-normal">
+              {rows.length} record{rows.length > 1 ? "s" : ""}
+            </span>
+          </h3>
         </div>
         <div className="flex flex-wrap gap-2">
-          <ExportBtn 
-            label="JSON" 
-            icon={<FileJson className="h-3.5 w-3.5" />} 
+          <ExportBtn
+            label="JSON"
+            icon={<FileJson className="h-3.5 w-3.5" />}
             onClick={() => handleExport("json")}
             disabled={!isExportFormatAllowed(plan, "json")}
             locked={!isExportFormatAllowed(plan, "json")}
           />
-          <ExportBtn 
-            label="CSV" 
-            icon={<FileSpreadsheet className="h-3.5 w-3.5" />} 
+          <ExportBtn
+            label="CSV"
+            icon={<FileSpreadsheet className="h-3.5 w-3.5" />}
             onClick={() => handleExport("csv")}
             disabled={!isExportFormatAllowed(plan, "csv")}
             locked={!isExportFormatAllowed(plan, "csv")}
           />
-          <ExportBtn 
-            label="Excel" 
-            icon={<Download className="h-3.5 w-3.5" />} 
+          <ExportBtn
+            label="Excel"
+            icon={<Download className="h-3.5 w-3.5" />}
             onClick={() => handleExport("xlsx")}
-            primary 
+            primary
             disabled={!isExportFormatAllowed(plan, "xlsx")}
           />
         </div>
@@ -167,18 +231,25 @@ export function AuditTable({
           <thead className="bg-white/[0.02] text-xs uppercase tracking-wider text-muted-foreground">
             <tr>
               <th className="text-left font-medium px-4 py-3 whitespace-nowrap">File</th>
-              {cols.map(k => (
-                <th key={k} className="text-left font-medium px-4 py-3 whitespace-nowrap">{prettify(k)}</th>
+              {cols.map((k) => (
+                <th key={k} className="text-left font-medium px-4 py-3 whitespace-nowrap">
+                  {prettify(k)}
+                </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {rows.map(r => (
+            {rows.map((r) => (
               <tr key={r.id} className="border-t border-border hover:bg-white/[0.02]">
-                <td className="px-4 py-2.5 text-xs text-muted-foreground max-w-[180px] truncate">{r.fileName}</td>
-                {cols.map(k => (
+                <td className="px-4 py-2.5 text-xs text-muted-foreground max-w-[180px] truncate">
+                  {r.fileName}
+                </td>
+                {cols.map((k) => (
                   <td key={k} className="px-4 py-2.5">
-                    <EditableCell cell={isCell(r[k]) ? (r[k] as Cell) : EMPTY} onChange={(v) => update(r.id, k, v)} />
+                    <EditableCell
+                      cell={isCell(r[k]) ? (r[k] as Cell) : EMPTY}
+                      onChange={(v) => update(r.id, k, v)}
+                    />
                   </td>
                 ))}
               </tr>
@@ -190,31 +261,100 @@ export function AuditTable({
   );
 }
 
-function ExportBtn({ label, icon, onClick, primary, disabled, locked }: {
-  label: string; icon: React.ReactNode; onClick: () => void; primary?: boolean; disabled?: boolean; locked?: boolean;
+function ExportBtn({
+  label,
+  icon,
+  onClick,
+  primary,
+  disabled,
+  locked,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  onClick: () => void;
+  primary?: boolean;
+  disabled?: boolean;
+  locked?: boolean;
 }) {
   return (
-    <button 
+    <button
       onClick={onClick}
       disabled={disabled}
       className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition relative
-        ${disabled 
-          ? "opacity-50 cursor-not-allowed border border-border/30" 
-          : primary 
-            ? "bg-lime text-primary-foreground hover:opacity-90" 
-            : "border border-border hover:bg-white/5"}`}>
+        ${
+          disabled
+            ? "opacity-50 cursor-not-allowed border border-border/30"
+            : primary
+              ? "bg-lime text-primary-foreground hover:opacity-90"
+              : "border border-border hover:bg-white/5"
+        }`}
+    >
       {icon} {label}
       {locked && <Lock className="h-2.5 w-2.5 ml-0.5" />}
     </button>
   );
 }
 
-export function ScanningSkeleton({ count }: { count: number }) {
+export function ScanningSkeleton({
+  count,
+  progress = 0,
+  currentStage,
+  etaLabel,
+  processedChunks,
+  totalChunks,
+  fileName,
+}: {
+  count: number;
+  progress?: number;
+  currentStage?: string | null;
+  etaLabel?: string | null;
+  processedChunks?: number;
+  totalChunks?: number;
+  fileName?: string | null;
+}) {
   return (
     <div className="mt-6 glass rounded-2xl overflow-hidden">
-      <div className="p-4 border-b border-border flex items-center gap-2 text-sm">
-        <Loader2 className="h-4 w-4 animate-spin text-lime" />
-        <span>AI is scanning {count} document{count > 1 ? "s" : ""}…</span>
+      <div className="p-4 border-b border-border space-y-4">
+        <div className="flex items-center gap-2 text-sm">
+          <Loader2 className="h-4 w-4 animate-spin text-lime" />
+          <span>
+            AI is scanning {count} document{count > 1 ? "s" : ""}…
+          </span>
+        </div>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3 text-sm">
+            <div className="min-w-0">
+              <p className="font-medium text-foreground truncate">
+                {currentStage || "Analyzing document structure"}
+              </p>
+              {fileName && (
+                <p className="text-xs text-muted-foreground truncate mt-1">{fileName}</p>
+              )}
+            </div>
+            <span className="text-lime font-semibold tabular-nums">
+              {Math.max(0, Math.min(100, progress))}%
+            </span>
+          </div>
+          <Progress value={progress} className="h-2 bg-white/8" />
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs text-muted-foreground">
+            <div className="flex items-center gap-1.5">
+              <FileSearch className="h-3.5 w-3.5 text-lime" />
+              <span>{currentStage || "Scanning…"}</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Layers3 className="h-3.5 w-3.5 text-lime" />
+              <span>
+                {typeof totalChunks === "number" && totalChunks > 0
+                  ? `${processedChunks ?? 0}/${totalChunks} parts done`
+                  : "Preparing parts"}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Clock3 className="h-3.5 w-3.5 text-lime" />
+              <span>{etaLabel || "Estimating time remaining…"}</span>
+            </div>
+          </div>
+        </div>
       </div>
       <div className="relative">
         <div className="absolute inset-x-0 h-px bg-lime shadow-[0_0_12px_2px_var(--lime-glow)] animate-scan z-10" />
@@ -222,7 +362,10 @@ export function ScanningSkeleton({ count }: { count: number }) {
           {Array.from({ length: count }).map((_, i) => (
             <div key={i} className="px-4 py-4 flex gap-4">
               {Array.from({ length: 6 }).map((_, j) => (
-                <div key={j} className="h-4 flex-1 rounded bg-gradient-to-r from-white/[0.03] via-white/[0.08] to-white/[0.03] bg-[length:1000px_100%] animate-shimmer" />
+                <div
+                  key={j}
+                  className="h-4 flex-1 rounded bg-gradient-to-r from-white/[0.03] via-white/[0.08] to-white/[0.03] bg-[length:1000px_100%] animate-shimmer"
+                />
               ))}
             </div>
           ))}
