@@ -1,6 +1,7 @@
-import { Download, FileJson, FileSpreadsheet, Sparkles, Loader2, Lock } from "lucide-react";
+import { Download, FileJson, FileSpreadsheet, Sparkles, Loader2, Lock, Clock3, FileSearch, Layers3 } from "lucide-react";
 import { isExportFormatAllowed, getExportFormatLabel, type ExportFormat } from "@/lib/exporters";
 import { toast } from "sonner";
+import { Progress } from "@/components/ui/progress";
 
 export type Cell = { v: string; c: number };
 
@@ -209,12 +210,58 @@ function ExportBtn({ label, icon, onClick, primary, disabled, locked }: {
   );
 }
 
-export function ScanningSkeleton({ count }: { count: number }) {
+export function ScanningSkeleton({
+  count,
+  progress = 0,
+  currentStage,
+  etaLabel,
+  processedChunks,
+  totalChunks,
+  fileName,
+}: {
+  count: number;
+  progress?: number;
+  currentStage?: string | null;
+  etaLabel?: string | null;
+  processedChunks?: number;
+  totalChunks?: number;
+  fileName?: string | null;
+}) {
   return (
     <div className="mt-6 glass rounded-2xl overflow-hidden">
-      <div className="p-4 border-b border-border flex items-center gap-2 text-sm">
-        <Loader2 className="h-4 w-4 animate-spin text-lime" />
-        <span>AI is scanning {count} document{count > 1 ? "s" : ""}…</span>
+      <div className="p-4 border-b border-border space-y-4">
+        <div className="flex items-center gap-2 text-sm">
+          <Loader2 className="h-4 w-4 animate-spin text-lime" />
+          <span>AI is scanning {count} document{count > 1 ? "s" : ""}…</span>
+        </div>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3 text-sm">
+            <div className="min-w-0">
+              <p className="font-medium text-foreground truncate">{currentStage || "Analyzing document structure"}</p>
+              {fileName && <p className="text-xs text-muted-foreground truncate mt-1">{fileName}</p>}
+            </div>
+            <span className="text-lime font-semibold tabular-nums">{Math.max(0, Math.min(100, progress))}%</span>
+          </div>
+          <Progress value={progress} className="h-2 bg-white/8" />
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs text-muted-foreground">
+            <div className="flex items-center gap-1.5">
+              <FileSearch className="h-3.5 w-3.5 text-lime" />
+              <span>{currentStage || "Scanning…"}</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Layers3 className="h-3.5 w-3.5 text-lime" />
+              <span>
+                {typeof totalChunks === "number" && totalChunks > 0
+                  ? `${processedChunks ?? 0}/${totalChunks} parts done`
+                  : "Preparing parts"}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Clock3 className="h-3.5 w-3.5 text-lime" />
+              <span>{etaLabel || "Estimating time remaining…"}</span>
+            </div>
+          </div>
+        </div>
       </div>
       <div className="relative">
         <div className="absolute inset-x-0 h-px bg-lime shadow-[0_0_12px_2px_var(--lime-glow)] animate-scan z-10" />
