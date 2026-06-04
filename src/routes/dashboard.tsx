@@ -10,7 +10,7 @@ import { UpgradeModal } from "@/components/UpgradeModal";
 import { PdfPreview } from "@/components/PdfPreview";
 import { HelpButton } from "@/components/HelpButton";
 import { useAuth } from "@/lib/auth";
-import { createExtractionJob, getJobStatus, type ExtractionRow } from "@/lib/jobs.functions";
+import { createExtractionJob, getJobStatus, type ExtractionRow, type JobStatusResponse } from "@/lib/jobs.functions";
 import { extractPdfText, pdfPageToImageDataUrl, imageFileToDataUrl } from "@/lib/pdf";
 import { getMyUsage, recordUpload, setAdminPlan } from "@/lib/usage.functions";
 import { exportJSON, exportCSV, exportXLSX } from "@/lib/exporters";
@@ -24,6 +24,14 @@ export const Route = createFileRoute("/dashboard")({
 
 type Tab = "extract" | "history" | "settings";
 const HISTORY_KEY = "dataflow_history";
+type JobProgressState = {
+  progress: number;
+  currentStage: string | null;
+  processedChunks: number;
+  totalChunks: number;
+  etaSeconds: number | null;
+  lastHeartbeat: string | null;
+};
 
 // ── Token estimation constants ──────────────────────────────────────────────
 // 1 token ≈ 4 characters (conservative estimate)
@@ -95,6 +103,14 @@ function extractClientError(error: any): string {
   }
 }
 
+function formatEtaLabel(etaSeconds: number | null): string {
+  if (etaSeconds === null || etaSeconds < 0) return "Estimating time remaining…";
+  if (etaSeconds <= 5) return "Less than 5 seconds left";
+  if (etaSeconds < 60) return `About ${etaSeconds} seconds left`;
+  const minutes = Math.ceil(etaSeconds / 60);
+  return `About ${minutes} minute${minutes === 1 ? "" : "s"} left`;
+}
+
 function Dashboard() {
   const { isAuthed, ready, email, isAdmin } = useAuth();
   const [rows, setRows] = useState<ExtractedRow[]>([]);
@@ -105,6 +121,14 @@ function Dashboard() {
   const [tab, setTab] = useState<Tab>("extract");
   const [usage, setUsage] = useState<Usage>({ plan: "free", used: 0, limit: 2, remaining: 2, unlimited: false });
   const [lastFile, setLastFile] = useState<File | null>(null);
+  const [jobProgress, setJobProgress] = useState<JobProgressState>({
+    progress: 0,
+    currentStage: null,
+    processedChunks: 0,
+    totalChunks: 0,
+    etaSeconds: null,
+    lastHeartbeat: null,
+  });
   const createJob     = useServerFn(createExtractionJob);
   const pollJob       = useServerFn(getJobStatus);
   const fetchUsage    = useServerFn(getMyUsage);
@@ -124,14 +148,31 @@ function Dashboard() {
       return { ok: false, error: created.error || "Failed to start extraction." };
     }
     const jobId = created.jobId;
-    const deadline = Date.now() + 10 * 60 * 1000; // 10 min safety cap
+    const deadline = Date.now() + 30 * 60 * 1000;
+    let stalePolls = 0;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 2000));
-      let s: { status: string; rows: ExtractionRow[]; error: string | null };
+      let s: JobStatusResponse;
       try {
-        s = (await pollJob({ data: { jobId } })) as typeof s;
+        s = (await pollJob({ data: { jobId } })) as JobStatusResponse;
       } catch {
         continue; // transient poll error → keep trying
+      }
+      setJobProgress({
+        progress: s.progress,
+        currentStage: s.currentStage,
+        processedChunks: s.processedChunks,
+        totalChunks: s.totalChunks,
+        etaSeconds: s.etaSeconds,
+        lastHeartbeat: s.lastHeartbeat,
+      });
+      if (s.lastHeartbeat && Date.now() - new Date(s.lastHeartbeat).getTime() > 90_000) {
+        stalePolls += 1;
+      } else {
+        stalePolls = 0;
+      }
+      if (stalePolls >= 2) {
+        return { ok: false, error: "The background extraction stopped responding. Please retry the file." };
       }
       if (s.status === "completed") {
         if (!s.rows.length) return { ok: false, error: "No data could be extracted from this document." };
@@ -139,7 +180,7 @@ function Dashboard() {
       }
       if (s.status === "failed") return { ok: false, error: s.error || "Extraction failed." };
     }
-    return { ok: false, error: "Extraction timed out. Please try again." };
+    return { ok: false, error: "This document is taking too long to process in the background. Please retry with a smaller file or scan fewer pages." };
   };
 
   const refreshUsage = useCallback(async () => {
@@ -176,6 +217,14 @@ function Dashboard() {
     setCurrentFile(file);
     setLastFile(file);
     setScanning(true);
+    setJobProgress({
+      progress: 3,
+      currentStage: "Preparing upload",
+      processedChunks: 0,
+      totalChunks: 0,
+      etaSeconds: null,
+      lastHeartbeat: null,
+    });
     const started = Date.now();
 
     const isImage = /^image\//i.test(file.type) || /\.(png|jpe?g|webp)$/i.test(file.name);
@@ -188,6 +237,7 @@ function Dashboard() {
       if (isImage) {
         // ── Image file → vision model directly ──
         toast.info("Processing image…");
+          setJobProgress((prev) => ({ ...prev, currentStage: "Preparing image", progress: 8 }));
         try {
           const imageDataUrl = await imageFileToDataUrl(file);
           // ✅ Check if data URL is too large (estimate: 4/3 for base64 encoding)
@@ -204,6 +254,7 @@ function Dashboard() {
       } else {
         // ── PDF → try text first, fall back to vision if scanned ──
         toast.info("Extracting text from PDF…");
+          setJobProgress((prev) => ({ ...prev, currentStage: "Reading PDF pages", progress: 10 }));
         let extracted: { text: string; pages: number };
         try {
           extracted = await extractPdfText(file);
@@ -252,6 +303,7 @@ function Dashboard() {
           action: { label: "Retry", onClick: () => runExtraction(file) },
         });
         setScanning(false);
+        setJobProgress((prev) => ({ ...prev, currentStage: "Failed" }));
         return;
       }
 
@@ -282,6 +334,14 @@ function Dashboard() {
 
       track("file_upload_success", { pages, duration_ms: Date.now() - started });
       toast.success("Extraction complete", { description: `${file.name} processed in ${((Date.now() - started) / 1000).toFixed(1)}s` });
+      setJobProgress({
+        progress: 100,
+        currentStage: "Completed",
+        processedChunks: jobProgress.totalChunks || 0,
+        totalChunks: jobProgress.totalChunks || 0,
+        etaSeconds: 0,
+        lastHeartbeat: new Date().toISOString(),
+      });
 
       if (!recorded.usage.unlimited && recorded.usage.remaining > 0 && recorded.usage.remaining <= 10) {
         toast.warning(`You have ${recorded.usage.remaining} upload${recorded.usage.remaining === 1 ? "" : "s"} remaining`);
@@ -294,6 +354,7 @@ function Dashboard() {
         description: error || "Unknown error occurred. Please try again.",
         action: { label: "Retry", onClick: () => runExtraction(file) },
       });
+      setJobProgress((prev) => ({ ...prev, currentStage: "Failed" }));
     } finally {
       setScanning(false);
     }
@@ -344,7 +405,15 @@ function Dashboard() {
                   <PdfPreview file={currentFile} />
                   <div>
                     {scanning ? (
-                      <ScanningSkeleton count={1} />
+                      <ScanningSkeleton
+                        count={1}
+                        progress={jobProgress.progress}
+                        currentStage={jobProgress.currentStage}
+                        etaLabel={formatEtaLabel(jobProgress.etaSeconds)}
+                        processedChunks={jobProgress.processedChunks}
+                        totalChunks={jobProgress.totalChunks}
+                        fileName={currentFile?.name ?? null}
+                      />
                     ) : rows.length > 0 ? (
                       <AuditTable rows={rows} setRows={setRows} onExport={(f) => onExport(f, rows)} locked={false} plan={usage.plan} />
                     ) : (
