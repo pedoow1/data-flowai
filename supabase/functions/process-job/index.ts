@@ -9,8 +9,8 @@ const VISION_MODEL = "gemini-3.5-flash";
 const MAX_TOKENS = 250000;
 const CHUNK_SIZE = 20000;
 const CHUNK_OVERLAP = 500;
-const PARALLEL_LIMIT = 8;      // ← غيّره لـ 8
-const BATCH_DELAY_MS = 1000;    // ← غيّره لـ 100
+const PARALLEL_LIMIT = 10;      // ← غيّره لـ 8
+const BATCH_DELAY_MS = 500;    // ← غيّره لـ 100
 const TIMEOUT_MS = 400000; // ✅ تم إضافة المتغير هنا لمنع ضرب الـ ReferenceError
 
 const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
