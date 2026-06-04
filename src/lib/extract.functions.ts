@@ -9,7 +9,7 @@ import { FlexibleRowSchema, FlexibleMultiRowSchema, normalizeRow } from "./flexi
 const TEXT_MODEL = "gemini-3.5-flash";
 const VISION_MODEL = "gemini-3.5-flash";
 const GOOGLE_API = "https://generativelanguage.googleapis.com/v1beta/models";
-const TIMEOUT_MS = 400000;
+const TIMEOUT_MS = 1800000;
 const MAX_TOKENS = 250000;
 const CHUNK_SIZE = 20000;
 const PARALLEL_LIMIT = 10;
