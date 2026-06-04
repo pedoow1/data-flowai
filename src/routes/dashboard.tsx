@@ -85,7 +85,7 @@ function estimateTokens(text: string): number {
 }
 
 // ── Client-side error extraction ────────────────────────────────────────────
-function extractClientError(error: any): string {
+function extractClientError(error: unknown): string {
   if (!error) return "Unknown error occurred";
 
   // Handle Error objects
