@@ -200,7 +200,7 @@ function Dashboard() {
         etaSeconds: s.etaSeconds,
         lastHeartbeat: s.lastHeartbeat,
       });
-      if (s.lastHeartbeat && Date.now() - new Date(s.lastHeartbeat).getTime() > 90_000) {
+      if (s.lastHeartbeat && Date.now() - new Date(s.lastHeartbeat).getTime() > 120_000) {
         stalePolls += 1;
       } else {
         stalePolls = 0;
