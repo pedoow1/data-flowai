@@ -87,6 +87,11 @@ function estimateTokens(text: string): number {
 // ── Client-side error extraction ────────────────────────────────────────────
 function extractClientError(error: unknown): string {
   if (!error) return "Unknown error occurred";
+  const maybeObject = typeof error === "object" && error !== null ? (error as Record<string, unknown>) : null;
+  const maybeNestedData =
+    maybeObject && typeof maybeObject.data === "object" && maybeObject.data !== null
+      ? (maybeObject.data as Record<string, unknown>)
+      : null;
 
   // Handle Error objects
   if (error instanceof Error) {
@@ -99,18 +104,18 @@ function extractClientError(error: unknown): string {
   }
 
   // Handle Response/fetch errors
-  if (error?.message) {
-    return String(error.message);
+  if (typeof maybeObject?.message === "string") {
+    return maybeObject.message;
   }
 
   // Handle JSON error responses
-  if (error?.error && typeof error.error === "string") {
-    return error.error;
+  if (typeof maybeObject?.error === "string") {
+    return maybeObject.error;
   }
 
   // Handle nested error messages
-  if (error?.data?.error) {
-    return String(error.data.error);
+  if (typeof maybeNestedData?.error === "string") {
+    return maybeNestedData.error;
   }
 
   // Fallback to JSON stringification for debugging
