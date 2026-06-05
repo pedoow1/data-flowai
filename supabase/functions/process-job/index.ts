@@ -72,11 +72,24 @@ function computeProgress(processed: number, total: number) {
   );
 }
 
-function computeEtaSeconds(startedAtMs: number, processed: number, total: number) {
-  if (processed <= 0 || total <= 0 || processed >= total) return 0;
-  const avgPerChunk = (Date.now() - startedAtMs) / processed;
-  return Math.max(1, Math.ceil((avgPerChunk * (total - processed)) / 1000));
+// Conservative starting guess for how long one chunk takes before we have any
+// real timing data. Once a chunk actually finishes we switch to measured speed.
+const BASELINE_SECONDS_PER_CHUNK = 22;
+
+function computeEtaSeconds(startedAtMs: number, completed: number, total: number) {
+  if (total <= 0) return null;
+  const remaining = total - completed;
+  if (remaining <= 0) return 0;
+  // Use measured speed once at least one chunk is done; otherwise fall back to
+  // the baseline so we never report a near-zero ETA at the very start.
+  let perChunkSec = BASELINE_SECONDS_PER_CHUNK;
+  if (completed > 0) {
+    const elapsedSec = (Date.now() - startedAtMs) / 1000;
+    perChunkSec = elapsedSec / completed;
+  }
+  return Math.max(1, Math.ceil(perChunkSec * remaining));
 }
+
 
 async function updateJob(jobId: string, patch: Record<string, unknown>) {
   const nextPatch = {
