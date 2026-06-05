@@ -519,7 +519,23 @@ async function extractFromImage(
   return { ok: true, rows: dedupeRows(result.rows), warnings: [], totalChunks: 1 };
 }
 
+async function beat(jobId: string) {
+  const { error } = await admin
+    .from("jobs")
+    .update({ last_heartbeat: new Date().toISOString() })
+    .eq("id", jobId);
+  if (error) console.error("[process-job] heartbeat failed", jobId, error.message);
+}
+
 async function processJob(jobId: string) {
+  // Keep the heartbeat fresh for the ENTIRE lifetime of the worker, even while
+  // a single AI chunk is taking minutes (timeouts + rate-limit retries). This
+  // guarantees the client never sees a false "stopped responding" alarm while
+  // the worker is genuinely still alive and processing.
+  const heartbeat = setInterval(() => {
+    void beat(jobId);
+  }, 15_000);
+
   try {
     const { data: job, error } = await admin.from("jobs").select("*").eq("id", jobId).single();
     if (error || !job) throw new Error("Job not found.");
@@ -535,6 +551,7 @@ async function processJob(jobId: string) {
       total_chunks: 0,
       eta_seconds: null,
     });
+
 
     const input = job.input as {
       kind: "text" | "image";
