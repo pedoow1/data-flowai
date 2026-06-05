@@ -11,9 +11,9 @@ const VISION_MODEL = "gemini-3.5-flash";
 const GOOGLE_API = "https://generativelanguage.googleapis.com/v1beta/models";
 const TIMEOUT_MS = 1800000;
 const MAX_TOKENS = 250000;
-const CHUNK_SIZE = 20000;
-const PARALLEL_LIMIT = 10;
-const BATCH_DELAY_MS = 500;
+const CHUNK_SIZE = 50000;
+const PARALLEL_LIMIT = 20;
+const BATCH_DELAY_MS = 100;
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
   const isAdminEmail =
