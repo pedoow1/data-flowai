@@ -592,7 +592,10 @@ async function processJob(jobId: string) {
       current_stage: "Failed",
       completed_at: new Date().toISOString(),
     });
+  } finally {
+    clearInterval(heartbeat);
   }
+
 }
 
 Deno.serve(async (req) => {
