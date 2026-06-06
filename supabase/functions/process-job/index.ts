@@ -72,10 +72,18 @@ function computeProgress(processed: number, total: number) {
   );
 }
 
+// Realistic per-chunk baseline so the ETA is never a misleading "5 seconds"
+// before any chunk has finished. Once chunks complete we use the measured speed.
+const BASELINE_SECONDS_PER_CHUNK = 18;
+
 function computeEtaSeconds(startedAtMs: number, processed: number, total: number) {
-  if (processed <= 0 || total <= 0 || processed >= total) return 0;
-  const avgPerChunk = (Date.now() - startedAtMs) / processed;
-  return Math.max(1, Math.ceil((avgPerChunk * (total - processed)) / 1000));
+  if (total <= 0 || processed >= total) return 0;
+  const remaining = total - processed;
+  const perChunkSec =
+    processed > 0
+      ? (Date.now() - startedAtMs) / 1000 / processed
+      : BASELINE_SECONDS_PER_CHUNK;
+  return Math.max(1, Math.ceil(perChunkSec * remaining));
 }
 
 async function updateJob(jobId: string, patch: Record<string, unknown>) {
@@ -85,6 +93,16 @@ async function updateJob(jobId: string, patch: Record<string, unknown>) {
   };
   const { error } = await admin.from("jobs").update(nextPatch).eq("id", jobId);
   if (error) console.error("[process-job] failed to update job", jobId, error.message);
+}
+
+// Lightweight heartbeat: only bumps last_heartbeat so the client never thinks
+// the worker stalled during a long Google AI call.
+async function beat(jobId: string) {
+  const { error } = await admin
+    .from("jobs")
+    .update({ last_heartbeat: new Date().toISOString() })
+    .eq("id", jobId);
+  if (error) console.error("[process-job] heartbeat failed", jobId, error.message);
 }
 
 async function callGoogleAI(
