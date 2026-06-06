@@ -1,4 +1,3 @@
-```json
 {
   "buildCommand": "node scripts/build-vercel.mjs",
   "framework": null,
@@ -9,4 +8,3 @@
     }
   }
 }
-```
