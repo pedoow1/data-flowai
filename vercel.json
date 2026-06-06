@@ -1,0 +1,10 @@
+{
+  "buildCommand": "node scripts/build-vercel.mjs",
+  "framework": null,
+  "installCommand": "npm install",
+  "functions": {
+    "src/server.ts": {
+      "maxDuration": 300
+    }
+  }
+}
