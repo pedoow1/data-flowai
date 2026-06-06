@@ -6,14 +6,17 @@ import { ADMIN_EMAIL } from "./config";
 import { FlexibleRowSchema, FlexibleMultiRowSchema, normalizeRow } from "./flexible-schema";
 
 // ── API configuration ────────────────────────────────────────────────────────
-const TEXT_MODEL = "gemini-2.5-flash";
-const VISION_MODEL = "gemini-2.5-flash";
+const TEXT_MODEL = "gemini-3.5-flash";
+const VISION_MODEL = "gemini-3.5-flash";
 const GOOGLE_API = "https://generativelanguage.googleapis.com/v1beta/models";
 const TIMEOUT_MS = 1800000;
 const MAX_TOKENS = 250000;
 const CHUNK_SIZE = 20000;
-const PARALLEL_LIMIT = 10;
-const BATCH_DELAY_MS = 500;
+
+// ✅ الحل: بدل PARALLEL_LIMIT ثابت، بنستخدم sequential مع delay بين كل request
+// Google Gemini free tier: 15 RPM, paid: 1000 RPM
+// بنحط 1 request في كل مرة مع delay عشان نضمن مش بنضغط الـ API
+const SEQUENTIAL_DELAY_MS = 2000; // 2 ثانية بين كل chunk = max 30 RPM آمنة
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
   const isAdminEmail =
@@ -164,7 +167,7 @@ function parseFlexibleResponse(
   return { ok: true, rows };
 }
 
-// ── Retry wrapper ─────────────────────────────────────────────────────────
+// ── Retry wrapper with exponential backoff ─────────────────────────────────
 async function runWithRetry(
   token: string,
   model: string,
@@ -172,7 +175,7 @@ async function runWithRetry(
 ): Promise<{ ok: true; rows: FlexibleRow[] } | { ok: false; error: string }> {
   let lastError = "Unknown error";
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= 4; attempt++) {
     try {
       const { status, bodyText } = await callGoogleAI(token, model, messages);
 
@@ -183,18 +186,26 @@ async function runWithRetry(
 
       console.error(`[extract/${model}] Google AI ${status}:`, bodyText.slice(0, 400));
 
-      // ✅ تم تصحيح الـ Block المكسور بالكامل هنا ليعمل الـ Compile بنجاح
+      if (status === 429) {
+        // Rate limit — نستنى أكتر بكتير مع exponential backoff
+        lastError = "Google AI rate limit reached.";
+        const waitMs = 15_000 * attempt; // 15s, 30s, 45s, 60s
+        console.log(`[extract] Rate limited, waiting ${waitMs}ms before retry ${attempt}...`);
+        await new Promise((r) => setTimeout(r, waitMs));
+        continue;
+      }
+
       if (status === 503 || status === 502 || status === 524) {
         lastError = "Google AI is temporarily unavailable.";
-        await new Promise((r) => setTimeout(r, 4000 * attempt));
+        await new Promise((r) => setTimeout(r, 5_000 * attempt));
         continue;
-      } else if (status === 429) {
-        lastError = "Google AI rate limit reached.";
-        await new Promise((r) => setTimeout(r, 8000 * attempt));
-        continue;
-      } else if (status === 401 || status === 403) {
+      }
+
+      if (status === 401 || status === 403) {
         return { ok: false, error: "Google AI authentication failed — check your GOOGLE_API_KEY in Vercel." };
-      } else if (status === 404) {
+      }
+
+      if (status === 404) {
         return { ok: false, error: `Google AI model not found: ${model}.` };
       }
 
@@ -210,7 +221,7 @@ async function runWithRetry(
       lastError = isAbort ? "Extraction timed out." : (e?.message ?? "Network error");
       console.error(`[extract/${model}] fetch failed:`, lastError);
       if (isAbort) break;
-      await new Promise((r) => setTimeout(r, 2_000));
+      await new Promise((r) => setTimeout(r, 3_000));
     }
   }
 
@@ -226,7 +237,7 @@ function chunkText(text: string, chunkSize: number): string[] {
   return chunks.length > 0 ? chunks : [""];
 }
 
-// ── Process single chunk (helper) ──────────────────────────────────────────
+// ── Process single chunk ──────────────────────────────────────────────────
 async function processChunk(
   token: string,
   model: string,
@@ -239,14 +250,7 @@ async function processChunk(
 
   const chunkPrompt = `${FLEXIBLE_PROMPT}\n\nDocument: ${fileName}\nPart ${chunkIndex + 1}/${totalChunks}\n\n---\n${chunk}${USER_SUFFIX}`;
 
-  const messages = [
-    {
-      role: "user",
-      content: chunkPrompt,
-    },
-  ];
-
-  return runWithRetry(token, model, messages);
+  return runWithRetry(token, model, [{ role: "user", content: chunkPrompt }]);
 }
 
 // ── Server function: text extraction ────────────────────────────────────────
@@ -257,7 +261,6 @@ export const extractFromText = createServerFn({ method: "POST" })
     const quotaError = await assertWithinQuota(context);
     if (quotaError) return { ok: false as const, error: quotaError };
 
-    // ✅ تم تصحيح الـ Token هنا ليسحب من مفتاح جوجل المناسب للـ URL
     const token = (process.env.GOOGLE_API_KEY || "").trim();
     if (!token) return { ok: false as const, error: "Server misconfigured (missing GOOGLE_API_KEY)." };
 
@@ -266,39 +269,32 @@ export const extractFromText = createServerFn({ method: "POST" })
     }
 
     const chunks = chunkText(data.text, CHUNK_SIZE);
-    console.log(`[extract] Processing ${chunks.length} chunk(s) for: ${data.fileName} with parallel limit of ${PARALLEL_LIMIT}`);
+    console.log(`[extract] Processing ${chunks.length} chunk(s) SEQUENTIALLY for: ${data.fileName}`);
 
     const allResults: FlexibleRow[] = [];
     const startTime = Date.now();
 
-    for (let batchStart = 0; batchStart < chunks.length; batchStart += PARALLEL_LIMIT) {
-      const batchEnd = Math.min(batchStart + PARALLEL_LIMIT, chunks.length);
-      const batchChunks = chunks.slice(batchStart, batchEnd);
+    // ✅ Sequential بدل Parallel — بنعالج chunk واحد في كل مرة
+    // ده بيمنع الـ rate limit تماماً
+    for (let i = 0; i < chunks.length; i++) {
+      const result = await processChunk(token, TEXT_MODEL, chunks[i], data.fileName, i, chunks.length);
 
-      console.log(`[extract] Processing parallel batch: chunks ${batchStart + 1} to ${batchEnd}/${chunks.length}`);
-
-      const batchPromises = batchChunks.map((chunk, batchIndex) =>
-        processChunk(token, TEXT_MODEL, chunk, data.fileName, batchStart + batchIndex, chunks.length)
-      );
-
-      const batchResults = await Promise.all(batchPromises);
-
-      for (let i = 0; i < batchResults.length; i++) {
-        const result = batchResults[i];
-        if (result.ok) {
-          allResults.push(...result.rows);
-          console.log(`[extract] Chunk ${batchStart + i + 1}: extracted ${result.rows.length} invoice(s)`);
-        } else {
-          console.error(`[extract] Chunk ${batchStart + i + 1} failed: ${result.error}`);
-          if (batchStart + i === 0) {
-            return { ok: false as const, error: result.error };
-          }
+      if (result.ok) {
+        allResults.push(...result.rows);
+        console.log(`[extract] Chunk ${i + 1}/${chunks.length}: extracted ${result.rows.length} invoice(s)`);
+      } else {
+        console.error(`[extract] Chunk ${i + 1} failed: ${result.error}`);
+        // لو الـ chunk الأول فشل، نوقف كل حاجة
+        if (i === 0) {
+          return { ok: false as const, error: result.error };
         }
+        // غير كده، نكمل على باقي الـ chunks
       }
 
-      if (batchEnd < chunks.length) {
-        console.log(`[extract] Waiting ${BATCH_DELAY_MS}ms before next parallel batch...`);
-        await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
+      // ✅ Delay بين كل chunk عشان منضغطش الـ API
+      if (i < chunks.length - 1) {
+        console.log(`[extract] Waiting ${SEQUENTIAL_DELAY_MS}ms before next chunk...`);
+        await new Promise((resolve) => setTimeout(resolve, SEQUENTIAL_DELAY_MS));
       }
     }
 
@@ -307,9 +303,8 @@ export const extractFromText = createServerFn({ method: "POST" })
     }
 
     const elapsedTime = Date.now() - startTime;
-    console.log(`[extract] Successfully processed all ${chunks.length} chunk(s) in ${elapsedTime}ms, extracted ${allResults.length} total invoice(s)`);
+    console.log(`[extract] Done: ${chunks.length} chunk(s) in ${elapsedTime}ms, ${allResults.length} total invoice(s)`);
 
-    // ✅ دايماً بنرجع مصفوفة rows موحدة عشان الـ Client Consistency
     return { ok: true as const, rows: allResults };
   });
 
@@ -321,7 +316,6 @@ export const extractFromImage = createServerFn({ method: "POST" })
     const quotaError = await assertWithinQuota(context);
     if (quotaError) return { ok: false as const, error: quotaError };
 
-    // ✅ تم تصحيح الـ Token هنا ليسحب من مفتاح جوجل
     const token = (process.env.GOOGLE_API_KEY || "").trim();
     if (!token) return { ok: false as const, error: "Server misconfigured (missing GOOGLE_API_KEY)." };
 
@@ -346,7 +340,7 @@ export const extractFromImage = createServerFn({ method: "POST" })
     const result = await runWithRetry(token, VISION_MODEL, messages);
     
     if (result.ok) {
-      return { ok: true as const, rows: result.rows }; // ✅ مصفوفة موحدة دايماً
+      return { ok: true as const, rows: result.rows };
     } else {
       return result;
     }
