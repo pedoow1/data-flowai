@@ -13,6 +13,8 @@ const CHUNK_OVERLAP = 350;
 const REQUEST_TIMEOUT_MS = 75_000;
 const PROGRESS_START = 12;
 const PROGRESS_END = 96;
+// ✅ Sequential processing — chunk واحد في كل مرة عشان منحرقش الـ rate limit
+const SEQUENTIAL_DELAY_MS = 2_500;
 
 const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -58,8 +60,8 @@ function chooseStrategy(textLength: number) {
   const large = textLength > 200_000;
   return {
     chunkSize: large ? LARGE_DOC_CHUNK_SIZE : DEFAULT_CHUNK_SIZE,
-    parallelLimit: large ? 2 : 3,
-    batchDelayMs: large ? 600 : 250,
+    parallelLimit: 1, // ✅ Sequential دايماً
+    batchDelayMs: SEQUENTIAL_DELAY_MS, // ✅ 2.5s بين كل chunk
   };
 }
 
