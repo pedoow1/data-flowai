@@ -1,5 +1,12 @@
+```json
 {
   "buildCommand": "node scripts/build-vercel.mjs",
   "framework": null,
-  "installCommand": "npm install"
+  "installCommand": "npm install",
+  "functions": {
+    "src/**/*.ts": {
+      "maxDuration": 300
+    }
+  }
 }
+```
