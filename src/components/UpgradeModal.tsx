@@ -17,7 +17,7 @@ export function UpgradeModal({ open, onClose }: { open: boolean; onClose: () => 
           <p className="text-muted-foreground mt-2 text-sm">Pick a plan. Cancel anytime.</p>
         </div>
         <div className="grid sm:grid-cols-2 gap-4">
-          <PlanCard name="Pro" price="$9" period="/mo" features={["50 documents / month", "All export formats", "Batch upload", "Priority processing"]} ctaUrl={LS_CHECKOUT_URL} highlight />
+          <PlanCard name="Pro" price="$9" period="/mo" features={["50 documents / month", "All export formats", "Batch upload"]} ctaUrl={LS_CHECKOUT_URL} highlight />
           <PlanCard name="Team" price="$29" period="/mo" features={["Unlimited documents", "API access", "Team workspace", "24/7 support"]} ctaUrl={LS_TEAM_CHECKOUT_URL} />
         </div>
       </div>
