@@ -6,8 +6,8 @@ import { ADMIN_EMAIL } from "./config";
 import { FlexibleRowSchema, FlexibleMultiRowSchema, normalizeRow } from "./flexible-schema";
 
 // ── API configuration ────────────────────────────────────────────────────────
-const TEXT_MODEL = "gemini-3.5-flash";
-const VISION_MODEL = "gemini-3.5-flash";
+const TEXT_MODEL = "gemini-2.5-flash";
+const VISION_MODEL = "gemini-2.5-flash";
 const GOOGLE_API = "https://generativelanguage.googleapis.com/v1beta/models";
 const TIMEOUT_MS = 1800000;
 const MAX_TOKENS = 250000;

@@ -4,8 +4,8 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const GOOGLE_API_KEY = (Deno.env.get("GOOGLE_API_KEY") || "").trim();
 const GOOGLE_API = "https://generativelanguage.googleapis.com/v1beta/models";
-const TEXT_MODEL = "gemini-3.5-flash";
-const VISION_MODEL = "gemini-3.5-flash";
+const TEXT_MODEL = "gemini-2.5-flash";
+const VISION_MODEL = "gemini-2.5-flash";
 const MAX_OUTPUT_TOKENS = 8192;
 const DEFAULT_CHUNK_SIZE = 12_000;
 const LARGE_DOC_CHUNK_SIZE = 9_000;
@@ -72,10 +72,18 @@ function computeProgress(processed: number, total: number) {
   );
 }
 
+// Realistic per-chunk baseline so the ETA is never a misleading "5 seconds"
+// before any chunk has finished. Once chunks complete we use the measured speed.
+const BASELINE_SECONDS_PER_CHUNK = 18;
+
 function computeEtaSeconds(startedAtMs: number, processed: number, total: number) {
-  if (processed <= 0 || total <= 0 || processed >= total) return 0;
-  const avgPerChunk = (Date.now() - startedAtMs) / processed;
-  return Math.max(1, Math.ceil((avgPerChunk * (total - processed)) / 1000));
+  if (total <= 0 || processed >= total) return 0;
+  const remaining = total - processed;
+  const perChunkSec =
+    processed > 0
+      ? (Date.now() - startedAtMs) / 1000 / processed
+      : BASELINE_SECONDS_PER_CHUNK;
+  return Math.max(1, Math.ceil(perChunkSec * remaining));
 }
 
 async function updateJob(jobId: string, patch: Record<string, unknown>) {
@@ -85,6 +93,16 @@ async function updateJob(jobId: string, patch: Record<string, unknown>) {
   };
   const { error } = await admin.from("jobs").update(nextPatch).eq("id", jobId);
   if (error) console.error("[process-job] failed to update job", jobId, error.message);
+}
+
+// Lightweight heartbeat: only bumps last_heartbeat so the client never thinks
+// the worker stalled during a long Google AI call.
+async function beat(jobId: string) {
+  const { error } = await admin
+    .from("jobs")
+    .update({ last_heartbeat: new Date().toISOString() })
+    .eq("id", jobId);
+  if (error) console.error("[process-job] heartbeat failed", jobId, error.message);
 }
 
 async function callGoogleAI(
@@ -412,7 +430,7 @@ async function extractFromText(
     progress: PROGRESS_START,
     total_chunks: chunks.length,
     processed_chunks: 0,
-    eta_seconds: null,
+    eta_seconds: computeEtaSeconds(startedAt, 0, chunks.length),
   });
 
   for (let start = 0; start < chunks.length; start += strategy.parallelLimit) {
@@ -424,7 +442,7 @@ async function extractFromText(
       progress: computeProgress(start, chunks.length),
       processed_chunks: start,
       total_chunks: chunks.length,
-      eta_seconds: computeEtaSeconds(startedAt, Math.max(1, start), chunks.length),
+      eta_seconds: computeEtaSeconds(startedAt, start, chunks.length),
     });
 
     const results = await Promise.all(
@@ -506,6 +524,13 @@ async function extractFromImage(
 }
 
 async function processJob(jobId: string) {
+  // Keep the heartbeat fresh for the entire lifetime of the worker, even while
+  // a single Google AI call is in flight. This prevents the client from ever
+  // declaring the worker "stopped responding".
+  const heartbeat = setInterval(() => {
+    void beat(jobId);
+  }, 15_000);
+
   try {
     const { data: job, error } = await admin.from("jobs").select("*").eq("id", jobId).single();
     if (error || !job) throw new Error("Job not found.");
@@ -561,6 +586,8 @@ async function processJob(jobId: string) {
       current_stage: "Failed",
       completed_at: new Date().toISOString(),
     });
+  } finally {
+    clearInterval(heartbeat);
   }
 }
 

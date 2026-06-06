@@ -183,7 +183,6 @@ function Dashboard() {
     }
     const jobId = created.jobId;
     const deadline = Date.now() + 30 * 60 * 1000;
-    let stalePolls = 0;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 2000));
       let s: JobStatusResponse;
@@ -200,17 +199,6 @@ function Dashboard() {
         etaSeconds: s.etaSeconds,
         lastHeartbeat: s.lastHeartbeat,
       });
-      if (s.lastHeartbeat && Date.now() - new Date(s.lastHeartbeat).getTime() > 90_000) {
-        stalePolls += 1;
-      } else {
-        stalePolls = 0;
-      }
-      if (stalePolls >= 2) {
-        return {
-          ok: false,
-          error: "The background extraction stopped responding. Please retry the file.",
-        };
-      }
       if (s.status === "completed") {
         if (!s.rows.length)
           return { ok: false, error: "No data could be extracted from this document." };

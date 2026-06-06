@@ -17,7 +17,7 @@ export const Route = createFileRoute("/pricing")({
 function PricingPage() {
   const tiers = [
     { name: "Free", price: "$0", period: "forever", desc: "Kick the tires.", features: ["2 documents", "Excel export only", "Manual edit"], cta: "Start free", href: "/login", primary: false },
-    { name: "Pro", price: "$9", period: "/month", desc: "For individuals shipping fast.", features: ["250 documents / month", "CSV, Excel export", "Batch upload", "Fast processing"], cta: "Upgrade to Pro", href: LS_CHECKOUT_URL, primary: true, external: true },
+    { name: "Pro", price: "$9", period: "/month", desc: "For individuals shipping fast.", features: ["250 documents / month", "CSV, Excel export", "Batch upload"], cta: "Upgrade to Pro", href: LS_CHECKOUT_URL, primary: true, external: true },
     { name: "Team", price: "$29", period: "/month", desc: "For high-volume workflows.", features: ["1000 documents / month (50/day limit)", "All export formats", "Batch upload", "Priority support"], cta: "Upgrade to Team", href: LS_TEAM_CHECKOUT_URL, primary: false, external: true },
   ];
   return (
