@@ -430,7 +430,7 @@ async function extractFromText(
     progress: PROGRESS_START,
     total_chunks: chunks.length,
     processed_chunks: 0,
-    eta_seconds: null,
+    eta_seconds: computeEtaSeconds(startedAt, 0, chunks.length),
   });
 
   for (let start = 0; start < chunks.length; start += strategy.parallelLimit) {
@@ -442,7 +442,7 @@ async function extractFromText(
       progress: computeProgress(start, chunks.length),
       processed_chunks: start,
       total_chunks: chunks.length,
-      eta_seconds: computeEtaSeconds(startedAt, Math.max(1, start), chunks.length),
+      eta_seconds: computeEtaSeconds(startedAt, start, chunks.length),
     });
 
     const results = await Promise.all(
