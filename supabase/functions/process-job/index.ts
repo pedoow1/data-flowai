@@ -524,6 +524,13 @@ async function extractFromImage(
 }
 
 async function processJob(jobId: string) {
+  // Keep the heartbeat fresh for the entire lifetime of the worker, even while
+  // a single Google AI call is in flight. This prevents the client from ever
+  // declaring the worker "stopped responding".
+  const heartbeat = setInterval(() => {
+    void beat(jobId);
+  }, 15_000);
+
   try {
     const { data: job, error } = await admin.from("jobs").select("*").eq("id", jobId).single();
     if (error || !job) throw new Error("Job not found.");
@@ -579,6 +586,8 @@ async function processJob(jobId: string) {
       current_stage: "Failed",
       completed_at: new Date().toISOString(),
     });
+  } finally {
+    clearInterval(heartbeat);
   }
 }
 
