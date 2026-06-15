@@ -6,17 +6,15 @@ import { ADMIN_EMAIL } from "./config";
 import { FlexibleRowSchema, FlexibleMultiRowSchema, normalizeRow } from "./flexible-schema";
 
 // ── API configuration ────────────────────────────────────────────────────────
-const TEXT_MODEL = "gemini-3.5-flash";
-const VISION_MODEL = "gemini-3.5-flash";
-const GOOGLE_API = "https://generativelanguage.googleapis.com/v1beta/models";
-const TIMEOUT_MS = 1800000;
-const MAX_TOKENS = 250000;
-const CHUNK_SIZE = 20000;
+const TEXT_MODEL   = "mistral-small-2506";
+const VISION_MODEL = "pixtral-12b-2409";
+const MISTRAL_API  = "https://api.mistral.ai/v1/chat/completions";
+const TIMEOUT_MS   = 90_000;
+const MAX_TOKENS   = 16_000;
+const CHUNK_SIZE   = 12_000;
 
-// ✅ الحل: بدل PARALLEL_LIMIT ثابت، بنستخدم sequential مع delay بين كل request
-// Google Gemini free tier: 15 RPM, paid: 1000 RPM
-// بنحط 1 request في كل مرة مع delay عشان نضمن مش بنضغط الـ API
-const SEQUENTIAL_DELAY_MS = 2000; // 2 ثانية بين كل chunk = max 30 RPM آمنة
+// Mistral paid tier: 500 RPM — sequential مع delay بسيط
+const SEQUENTIAL_DELAY_MS = 1_500; // 1.5 ثانية بين كل chunk = max 40 RPM آمنة
 
 async function assertWithinQuota(context: { supabase: unknown; userId: string; claims: { email: string | null } }) {
   const isAdminEmail =
@@ -76,8 +74,8 @@ CRITICAL RULES:
 
 const USER_SUFFIX = `\n\nIMPORTANT: Do not truncate any text, numbers, or company names. Copy every value exactly as it appears in the document, character by character. Extract ALL invoices present, even if some fields are missing.`;
 
-// ── Google Gemini API helper ─────────────────────────────────────────────────
-async function callGoogleAI(
+// ── Mistral API helper ────────────────────────────────────────────────────────
+async function callMistral(
   token: string,
   model: string,
   messages: any[],
@@ -85,35 +83,22 @@ async function callGoogleAI(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
-  const contents = messages.map((msg: any) => {
-    if (typeof msg.content === "string") {
-      return { role: msg.role === "assistant" ? "model" : "user", parts: [{ text: msg.content }] };
-    }
-    const parts = msg.content.map((p: any) => {
-      if (p.type === "text") return { text: p.text };
-      if (p.type === "image_url") {
-        const [header, base64] = p.image_url.url.split(",");
-        const mimeType = header.match(/data:(.*);base64/)?.[1] || "image/jpeg";
-        return { inlineData: { mimeType, data: base64 } };
-      }
-      return { text: "" };
-    });
-    return { role: "user", parts };
-  });
-
   try {
-    const res = await fetch(
-      `${GOOGLE_API}/${model}:generateContent?key=${token}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
-        body: JSON.stringify({
-          contents,
-          generationConfig: { temperature: 0.0, maxOutputTokens: MAX_TOKENS },
-        }),
-      }
-    );
+    const res = await fetch(MISTRAL_API, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature: 0,
+        max_tokens: MAX_TOKENS,
+        response_format: { type: "json_object" },
+      }),
+    });
     return { status: res.status, bodyText: await res.text() };
   } finally {
     clearTimeout(timer);
@@ -130,14 +115,16 @@ function parseFlexibleResponse(
 
   let json: any;
   try { json = JSON.parse(bodyText); }
-  catch { return { ok: false, error: "Google AI returned invalid JSON." }; }
+  catch { return { ok: false, error: "Mistral returned invalid JSON." }; }
 
-  const content: string = json?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  // Mistral response shape: choices[0].message.content
+  const content: string = json?.choices?.[0]?.message?.content ?? "";
   if (!content) {
-    return { ok: false, error: "Google AI returned empty response." };
+    return { ok: false, error: "Mistral returned empty response." };
   }
 
-  const cleaned = content.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
+  const cleaned = content.trim()
+    .replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
 
   let parsed: unknown;
   try { parsed = JSON.parse(cleaned); }
@@ -177,51 +164,50 @@ async function runWithRetry(
 
   for (let attempt = 1; attempt <= 4; attempt++) {
     try {
-      const { status, bodyText } = await callGoogleAI(token, model, messages);
+      const { status, bodyText } = await callMistral(token, model, messages);
 
       if (status === 200) {
         const result = parseFlexibleResponse(status, bodyText, model);
         return result ?? { ok: false, error: "Failed to parse response." };
       }
 
-      console.error(`[extract/${model}] Google AI ${status}:`, bodyText.slice(0, 400));
+      console.error(`[extract/${model}] Mistral ${status}:`, bodyText.slice(0, 400));
 
       if (status === 429) {
-        // Rate limit — نستنى أكتر بكتير مع exponential backoff
-        lastError = "Google AI rate limit reached.";
-        const waitMs = 15_000 * attempt; // 15s, 30s, 45s, 60s
+        lastError = "Mistral rate limit reached.";
+        const waitMs = 10_000 * attempt; // 10s, 20s, 30s, 40s
         console.log(`[extract] Rate limited, waiting ${waitMs}ms before retry ${attempt}...`);
         await new Promise((r) => setTimeout(r, waitMs));
         continue;
       }
 
-      if (status === 503 || status === 502 || status === 524) {
-        lastError = "Google AI is temporarily unavailable.";
-        await new Promise((r) => setTimeout(r, 5_000 * attempt));
+      if ([502, 503, 504, 524].includes(status)) {
+        lastError = "Mistral is temporarily unavailable.";
+        await new Promise((r) => setTimeout(r, 4_000 * attempt));
         continue;
       }
 
       if (status === 401 || status === 403) {
-        return { ok: false, error: "Google AI authentication failed — check your GOOGLE_API_KEY in Vercel." };
+        return { ok: false, error: "Mistral authentication failed — check your MISTRAL_API_KEY." };
       }
 
       if (status === 404) {
-        return { ok: false, error: `Google AI model not found: ${model}.` };
+        return { ok: false, error: `Mistral model not found: ${model}.` };
       }
 
       try {
         const parsed = JSON.parse(bodyText);
         const msg = parsed?.error?.message || parsed?.message;
-        if (msg) return { ok: false, error: `Google AI: ${msg}` };
+        if (msg) return { ok: false, error: `Mistral: ${msg}` };
       } catch { /* plain text body */ }
 
-      return { ok: false, error: `Google AI error (${status}): ${bodyText.slice(0, 200)}` };
+      return { ok: false, error: `Mistral error (${status}): ${bodyText.slice(0, 200)}` };
     } catch (e: any) {
       const isAbort = e?.name === "AbortError";
       lastError = isAbort ? "Extraction timed out." : (e?.message ?? "Network error");
       console.error(`[extract/${model}] fetch failed:`, lastError);
-      if (isAbort) break;
-      await new Promise((r) => setTimeout(r, 3_000));
+      if (isAbort) await new Promise((r) => setTimeout(r, 3_000 * attempt));
+      else         await new Promise((r) => setTimeout(r, 2_000 * attempt));
     }
   }
 
@@ -261,8 +247,8 @@ export const extractFromText = createServerFn({ method: "POST" })
     const quotaError = await assertWithinQuota(context);
     if (quotaError) return { ok: false as const, error: quotaError };
 
-    const token = (process.env.GOOGLE_API_KEY || "").trim();
-    if (!token) return { ok: false as const, error: "Server misconfigured (missing GOOGLE_API_KEY)." };
+    const token = (process.env.MISTRAL_API_KEY || "").trim();
+    if (!token) return { ok: false as const, error: "Server misconfigured (missing MISTRAL_API_KEY)." };
 
     if (data.text.length < 20) {
       return { ok: false as const, error: "__NEEDS_VISION__" };
@@ -274,8 +260,6 @@ export const extractFromText = createServerFn({ method: "POST" })
     const allResults: FlexibleRow[] = [];
     const startTime = Date.now();
 
-    // ✅ Sequential بدل Parallel — بنعالج chunk واحد في كل مرة
-    // ده بيمنع الـ rate limit تماماً
     for (let i = 0; i < chunks.length; i++) {
       const result = await processChunk(token, TEXT_MODEL, chunks[i], data.fileName, i, chunks.length);
 
@@ -284,14 +268,11 @@ export const extractFromText = createServerFn({ method: "POST" })
         console.log(`[extract] Chunk ${i + 1}/${chunks.length}: extracted ${result.rows.length} invoice(s)`);
       } else {
         console.error(`[extract] Chunk ${i + 1} failed: ${result.error}`);
-        // لو الـ chunk الأول فشل، نوقف كل حاجة
         if (i === 0) {
           return { ok: false as const, error: result.error };
         }
-        // غير كده، نكمل على باقي الـ chunks
       }
 
-      // ✅ Delay بين كل chunk عشان منضغطش الـ API
       if (i < chunks.length - 1) {
         console.log(`[extract] Waiting ${SEQUENTIAL_DELAY_MS}ms before next chunk...`);
         await new Promise((resolve) => setTimeout(resolve, SEQUENTIAL_DELAY_MS));
@@ -316,9 +297,10 @@ export const extractFromImage = createServerFn({ method: "POST" })
     const quotaError = await assertWithinQuota(context);
     if (quotaError) return { ok: false as const, error: quotaError };
 
-    const token = (process.env.GOOGLE_API_KEY || "").trim();
-    if (!token) return { ok: false as const, error: "Server misconfigured (missing GOOGLE_API_KEY)." };
+    const token = (process.env.MISTRAL_API_KEY || "").trim();
+    if (!token) return { ok: false as const, error: "Server misconfigured (missing MISTRAL_API_KEY)." };
 
+    // Mistral vision: image_url مدعوم في pixtral
     const messages = [
       {
         role: "user",
@@ -338,7 +320,7 @@ export const extractFromImage = createServerFn({ method: "POST" })
     ];
 
     const result = await runWithRetry(token, VISION_MODEL, messages);
-    
+
     if (result.ok) {
       return { ok: true as const, rows: result.rows };
     } else {
