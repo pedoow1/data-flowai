@@ -100,18 +100,30 @@ export const createExtractionJob = createServerFn({ method: "POST" })
     // immediately and keeps processing via EdgeRuntime.waitUntil, so this
     // request never waits for the AI work — no Vercel timeout.
     try {
-      const response = await fetch(`${projectUrl}/functions/v1/process-job`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${serviceKey}`,
-          apikey: serviceKey ?? "",
-        },
-        body: JSON.stringify({ jobId: job.id }),
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10_000);
+      let response: Response;
+      try {
+        response = await fetch(`${projectUrl}/functions/v1/process-job`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${serviceKey}`,
+            apikey: serviceKey ?? "",
+            "x-no-compress": "1",
+          },
+          body: JSON.stringify({ jobId: job.id }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+      // Drain the response body fully — this keeps the TCP connection open
+      // long enough for Supabase's EdgeRuntime.waitUntil to register the
+      // background task before the caller closes the socket.
+      await response.text().catch(() => {});
       if (!response.ok) {
-        const body = await response.text();
-        console.error("[createExtractionJob] process-job returned non-OK:", response.status, body);
+        console.error("[createExtractionJob] process-job returned non-OK:", response.status);
         return { ok: false as const, error: "Could not start the background extraction worker." };
       }
     } catch (e) {
