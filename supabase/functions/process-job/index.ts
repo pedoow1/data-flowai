@@ -5,17 +5,19 @@ const SUPABASE_URL       = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY        = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const MISTRAL_API_KEY    = (Deno.env.get("MISTRAL_API_KEY") || "").trim();
 const MISTRAL_API        = "https://api.mistral.ai/v1/chat/completions";
+const GITHUB_TOKEN       = (Deno.env.get("GITHUB_TOKEN") || "").trim();
+const GITHUB_API         = "https://models.inference.ai.azure.com/chat/completions";
 const TEXT_MODEL         = "mistral-small-2506";
-const VISION_MODEL       = "pixtral-12b-2409";
+const VISION_MODEL       = "gpt-4o";
 const REQUEST_TIMEOUT_MS = 90_000;
 
 // ── Batching ──────────────────────────────────────────────────────────────────
-const INVOICES_PER_BATCH     = 10;
-const PARALLEL_BATCH_SIZE    = 25;
-const FALLBACK_CHUNK_SIZE    = 12_000;
+const INVOICES_PER_BATCH        = 10;
+const PARALLEL_BATCH_SIZE       = 25;
+const FALLBACK_CHUNK_SIZE       = 12_000;
 const SINGLE_REQUEST_CHAR_LIMIT = 10_000;
-const FALLBACK_CHUNK_OVERLAP = 350;
-const BATCH_DELAY_MS         = 1_500;
+const FALLBACK_CHUNK_OVERLAP    = 350;
+const BATCH_DELAY_MS            = 1_500;
 
 // ── Pattern detection ─────────────────────────────────────────────────────────
 const PATTERN_SAMPLE_CHARS = 20_000;
@@ -36,29 +38,21 @@ type Cell        = { v: string; c: number };
 type FlexibleRow = Record<string, Cell>;
 
 // ── Summary row keywords (Arabic + English) ───────────────────────────────────
-const SUMMARY_KEYWORDS_REGEX = /^(total|grand\s*total|sub\s*total|subtotal|إجمالي|الإجمالي|الإجمالي\s*الفرعي|الإجمالي\s*النهائي|مجموع|المجموع|ضريبة|الضريبة|vat|gst|tax|discount|خصم|shipping|شحن|delivery|توصيل)$/i;
 
 // ── Prompts ───────────────────────────────────────────────────────────────────
-const FLEXIBLE_PROMPT = `You are an elite invoice data extraction agent. Your job is to extract every line item as a separate row.
+const FLEXIBLE_PROMPT = `You are an elite invoice data extraction agent. Extract every piece of information from the invoice.
 
 CRITICAL RULES:
-1. LINE ITEM SPLITTING: Every invoice may contain multiple line items (services, products). You MUST create a SEPARATE row for each line item. Never merge multiple items into one row.
-2. For each line item row, duplicate the invoice metadata: invoice_number, client, date, dueDate, vendor.
-3. Each line item row must contain: invoice_number, client, date, dueDate, vendor, description, amount, quantity (if present), unit_price (if present), reference_id (if present).
-4. LINE ITEMS ONLY: Do NOT include summary rows (subtotals, totals, taxes, discounts, shipping) as line items. These belong in the invoice summary fields below.
-5. After all line item rows for an invoice, add ONE summary row with:
-   - description = "INVOICE_SUMMARY"
-   - invoice_number = (same as the invoice)
-   - subtotal = the pre-tax total
-   - tax = the tax amount (with the rate if shown, e.g. "161.70 (14%)")
-   - total = the grand total / amount due
-   - Leave all other fields empty in this summary row.
-6. Extract ALL invoices, ALL pages, ALL line items. Never skip or drop any.
-7. If invoice numbers are sequential (e.g. INV-001 to INV-100), make sure ALL numbers are present with no gaps.
-8. Copy every value EXACTLY as it appears — never truncate, round, or reformat.
-9. Return ONLY a valid JSON array, no prose, no markdown, no code fences.`;
+1. LINE ITEM SPLITTING: Every invoice may contain multiple line items. Create a SEPARATE row for each line item. Never merge items.
+2. HEADER FIELDS (repeat in every row): fields that belong to the invoice as a whole — client name, address, phone, tax number, invoice number, date, due date, payment method. These appear once per invoice but must be copied into every line item row.
+3. SUMMARY FIELDS (first row only): fields that summarize the whole invoice and are NOT per-item — e.g. subtotal, discount, tax amount, grand total, amount in words. Put these values ONLY in the FIRST line item row of each invoice. Leave them EMPTY in all subsequent rows of the same invoice.
+4. LINE ITEM FIELDS: fields that are specific to each item — e.g. item name, description, quantity, unit price, item total. These change per row.
+5. FIELD NAMES: Use the EXACT label as written in the invoice — Arabic labels for Arabic invoices, English camelCase for English. Look everywhere: column headers, side labels, footer fields, summary boxes. Every label = a separate field. Never invent, translate, or merge field names.
+6. Extract ALL invoices, ALL pages, ALL line items. Never skip anything.
+7. Copy every value EXACTLY — never truncate, round, or reformat.
+8. Return ONLY a valid JSON array, no prose, no markdown, no code fences.`;
 
-const USER_SUFFIX = `\n\nReturn a JSON ARRAY. For each invoice: first output all real line item rows, then one INVOICE_SUMMARY row. Never include totals/taxes/discounts as regular line items. Do not drop rows, do not invent fields, and keep all strings exact.`;
+const USER_SUFFIX = `\n\nReturn a JSON ARRAY. For each invoice output all line item rows with field names taken EXACTLY from the invoice column headers in their original language — Arabic if the invoice is Arabic, English if English. Do not translate, invent, or merge field names, and keep all strings exact.`;
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function wait(ms: number) {
@@ -146,7 +140,6 @@ async function callMistral(
   }
 }
 
-// ── استخراج الـ content من response Mistral ───────────────────────────────────
 function extractContent(bodyText: string): string | null {
   try {
     const json = JSON.parse(bodyText);
@@ -369,35 +362,15 @@ function canonKey(k: string): string {
   return k.trim();
 }
 
-function isSummaryRow(row: Record<string, unknown>): boolean {
-  const desc = (row as any)?.description;
-  const descValue = typeof desc === "string"
-    ? desc
-    : typeof desc?.v === "string"
-    ? desc.v
-    : "";
-
-  if (descValue.trim().toUpperCase() === "INVOICE_SUMMARY") return true;
-  if (SUMMARY_KEYWORDS_REGEX.test(descValue.trim())) return true;
-
-  return false;
-}
-
 function normalizeRow(x: unknown): FlexibleRow | null {
   if (!x || typeof x !== "object" || Array.isArray(x)) return null;
-
-  if (isSummaryRow(x as Record<string, unknown>)) {
-    console.log(`[process-job] normalizeRow: skipping summary row →`, JSON.stringify(x).slice(0, 120));
-    return null;
-  }
 
   const source = x as Record<string, unknown>;
   const out: FlexibleRow = {};
   for (const key of Object.keys(source)) {
     const cell = toCell(source[key]);
     if (!cell || !cell.v || cell.v === "—") continue;
-    const normalizedKey = canonKey(key);
-    if (!out[normalizedKey]) out[normalizedKey] = cell;
+    if (!out[key]) out[key] = cell;
   }
   return Object.keys(out).length > 0 ? out : null;
 }
@@ -439,7 +412,7 @@ function dedupeRows(rows: FlexibleRow[]) {
   return out;
 }
 
-// ── Mistral response parser ───────────────────────────────────────────────────
+// ── Response parser ───────────────────────────────────────────────────────────
 function parseResponse(
   status: number,
   bodyText: string,
@@ -447,33 +420,34 @@ function parseResponse(
   if (status !== 200) return null;
 
   const content = extractContent(bodyText);
-  if (!content) return { ok: false, error: "Mistral returned an empty response." };
+  if (!content) return { ok: false, error: "Model returned an empty response." };
 
   const cleaned = content.trim()
     .replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
 
   let parsed: unknown;
   try { parsed = JSON.parse(cleaned); }
-  catch { return { ok: false, error: "Mistral returned an unparseable response." }; }
+  catch { return { ok: false, error: "Model returned an unparseable response." }; }
 
   const rows = toRowArray(parsed)
     .map(normalizeRow)
     .filter((row): row is FlexibleRow => row !== null);
 
-  if (rows.length === 0) return { ok: false, error: "Mistral response contained no usable rows." };
+  if (rows.length === 0) return { ok: false, error: "Model response contained no usable rows." };
   return { ok: true, rows };
 }
 
-// ── Retry wrapper ─────────────────────────────────────────────────────────────
+// ── Mistral retry wrapper ─────────────────────────────────────────────────────
 async function runWithRetry(
   model: string,
   messages: unknown[],
+  jsonMode = true,
 ): Promise<{ ok: true; rows: FlexibleRow[] } | { ok: false; error: string }> {
   let lastError = "Unknown error";
 
   for (let attempt = 1; attempt <= 4; attempt++) {
     try {
-      const { status, bodyText } = await callMistral(model, messages);
+      const { status, bodyText } = await callMistral(model, messages, jsonMode);
 
       if (status === 200) {
         const result = parseResponse(status, bodyText);
@@ -513,8 +487,83 @@ async function runWithRetry(
   return { ok: false, error: `${lastError} Please try again.` };
 }
 
-// ── NEW: Self-review pass for image OCR correction ────────────────────────────
-// بيبعت الصورة الأصلية + الـ draft المستخرج ويطلب تصحيح أخطاء OCR فقط
+// ── Image data URL passed directly to GitHub Models ─────────────────────────
+
+
+// ── GitHub Models API call (vision) ──────────────────────────────────────────
+async function callGitHub(
+  messages: unknown[],
+): Promise<{ status: number; bodyText: string }> {
+  const controller = new AbortController();
+  const timer      = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const body: Record<string, unknown> = {
+      model:       VISION_MODEL,
+      messages,
+      temperature: 0,
+      max_tokens:  16000,
+    };
+
+    const res = await fetch(GITHUB_API, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization:  `Bearer ${GITHUB_TOKEN}`,
+      },
+      signal: controller.signal,
+      body:   JSON.stringify(body),
+    });
+    return { status: res.status, bodyText: await res.text() };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function runGitHubWithRetry(
+  messages: unknown[],
+): Promise<{ ok: true; rows: FlexibleRow[] } | { ok: false; error: string }> {
+  let lastError = "Unknown error";
+
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      const { status, bodyText } = await callGitHub(messages);
+
+      if (status === 200) {
+        const result = parseResponse(status, bodyText);
+        return result ?? { ok: false, error: "Failed to parse GitHub Models response." };
+      }
+
+      console.error(`[process-job] GitHub Models ${status}:`, bodyText.slice(0, 300));
+
+      if (status === 429) {
+        lastError     = "GitHub Models rate limit reached.";
+        const delayMs = 10_000 * attempt;
+        await wait(delayMs);
+        continue;
+      }
+      if ([502, 503, 504, 524].includes(status)) {
+        lastError = "GitHub Models is temporarily unavailable.";
+        await wait(4_000 * attempt);
+        continue;
+      }
+      if (status === 401 || status === 403) {
+        return { ok: false, error: "GitHub Models authentication failed — check GITHUB_TOKEN." };
+      }
+      return { ok: false, error: `GitHub Models error (${status}).` };
+
+    } catch (error: any) {
+      const aborted = error?.name === "AbortError";
+      lastError     = aborted ? "GitHub Models request timed out." : (error?.message ?? "Network error");
+      if (aborted) await wait(3_000 * attempt);
+      else         await wait(2_000 * attempt);
+    }
+  }
+
+  return { ok: false, error: `${lastError} Please try again.` };
+}
+
+// ── Self-review pass for image OCR correction ─────────────────────────────────
 async function selfReviewImage(
   imageDataUrl: string,
   draft: FlexibleRow[],
@@ -525,31 +574,32 @@ async function selfReviewImage(
 
 ${JSON.stringify(draft, null, 2)}
 
-Look at the ORIGINAL IMAGE again carefully and fix ONLY clear OCR mistakes.
+Now look at the ORIGINAL IMAGE again carefully and do a FULL review and correction pass.
 
-Examples of OCR mistakes to fix:
-- Arabic: "طعم" → "طقم", "بدوي" → "يدوي", "مكتبة" → "مكيفة"
-- English: "lnvoice" → "Invoice", "O" used instead of "0" in numbers
+Check and fix ALL of the following:
+1. OCR errors: misread characters in Arabic or English (e.g. "طعم" → "طقم", "lnvoice" → "Invoice", "O" vs "0").
+2. Wrong field placement: make sure each value is in the correct field. For example, "الصنف" must contain the item category, and "الوصف" must contain the item description — not swapped.
+3. Wrong field names: if a field name is misread or garbled (e.g. "الرقم الصري" instead of "الرقم الضريبي"), correct the field name too.
+4. Missing or swapped values between columns: re-read each row against the image and make sure every value matches its column.
 
 Rules:
-- Fix ONLY visually obvious OCR errors where you are 100% certain.
-- Do NOT change any numbers, dates, amounts, or totals.
-- Do NOT add, remove, or reorder any rows or fields.
-- Keep the EXACT same JSON structure, field names, and array length.
+- Do NOT add or remove rows.
+- Do NOT change the number of fields per row.
+- Keep the EXACT same JSON structure and array length.
 - Return ONLY the corrected JSON array, no prose, no markdown, no code fences.`;
 
-  const { status, bodyText } = await callMistral(VISION_MODEL, [
+  const { status, bodyText } = await callGitHub([
     {
       role: "user",
       content: [
-        { type: "image_url", image_url: { url: imageDataUrl } },
+        { type: "image_url", image_url: { url: imageDataUrl, detail: "high" } },
         { type: "text", text: reviewPrompt },
       ],
     },
   ]);
 
   if (status !== 200) {
-    console.warn(`[process-job] selfReviewImage: Mistral returned ${status} → skipping correction`);
+    console.warn(`[process-job] selfReviewImage: GitHub Models returned ${status} → skipping correction`);
     return draft;
   }
 
@@ -581,40 +631,6 @@ Rules:
 
   console.log(`[process-job] selfReviewImage: ✓ corrected ${correctedRows.length} row(s)`);
   return correctedRows;
-}
-
-// ── NEW: Two-pass image extraction (extract → self-review) ────────────────────
-async function extractImageWithReview(
-  imageDataUrl: string,
-  fileName: string,
-): Promise<{ ok: true; rows: FlexibleRow[] } | { ok: false; error: string }> {
-  // Pass 1: استخراج البيانات كالعادة
-  console.log("[process-job] extractImageWithReview: Pass 1 — extraction...");
-
-  const pass1Messages = [
-    {
-      role: "user",
-      content: [
-        { type: "image_url", image_url: { url: imageDataUrl } },
-        { type: "text", text: `${FLEXIBLE_PROMPT}\n\nDocument filename: ${fileName}${USER_SUFFIX}` },
-      ],
-    },
-  ];
-
-  const pass1 = await runWithRetry(VISION_MODEL, pass1Messages);
-
-  if (!pass1.ok) {
-    console.error("[process-job] extractImageWithReview: Pass 1 failed →", pass1.error);
-    return pass1;
-  }
-
-  console.log(`[process-job] extractImageWithReview: Pass 1 ✓ — ${pass1.rows.length} row(s)`);
-
-  // Pass 2: مراجعة وتصحيح أخطاء OCR
-  console.log("[process-job] extractImageWithReview: Pass 2 — self-review...");
-  const correctedRows = await selfReviewImage(imageDataUrl, pass1.rows);
-
-  return { ok: true, rows: correctedRows };
 }
 
 // ── Process one batch ─────────────────────────────────────────────────────────
@@ -752,18 +768,23 @@ async function processJob(jobId: string, job: any) {
     await updateJob(jobId, {
       status:           "processing",
       started_at:       new Date().toISOString(),
-      current_stage:    "Scanning image with Mistral Vision (Pass 1: extraction)",
+      current_stage:    "Scanning image with GPT-4o (Pass 1: extraction)",
       progress:         25,
       total_chunks:     1,
       processed_chunks: 0,
       eta_seconds:      60,
     });
 
-    const pass1Result = await runWithRetry(VISION_MODEL, [
+    const imageDataUrl = input.imageDataUrl ?? "";
+
+    const [_hdr, _b64] = imageDataUrl.split(",");
+    const _mime = _hdr.match(/data:(.*);base64/)?.[1] || "image/jpeg";
+
+    const pass1Result = await runGitHubWithRetry([
       {
         role: "user",
         content: [
-          { type: "image_url", image_url: { url: input.imageDataUrl ?? "" } },
+          { type: "image_url", image_url: { url: imageDataUrl, detail: "high" } },
           { type: "text", text: `${FLEXIBLE_PROMPT}\n\nDocument filename: ${fileName}${USER_SUFFIX}` },
         ],
       },
@@ -779,14 +800,13 @@ async function processJob(jobId: string, job: any) {
       return;
     }
 
-    // Pass 2: مراجعة وتصحيح أخطاء OCR
     await updateJob(jobId, {
       current_stage: "Reviewing OCR results (Pass 2: self-review)",
       progress:      65,
       eta_seconds:   30,
     });
 
-    const correctedRows = await selfReviewImage(input.imageDataUrl ?? "", pass1Result.rows);
+    const correctedRows = await selfReviewImage(imageDataUrl, pass1Result.rows);
 
     await updateJob(jobId, {
       status:           "completed",
