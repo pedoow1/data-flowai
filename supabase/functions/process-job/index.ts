@@ -161,10 +161,22 @@ Do not apply fixed templates, assumed field names, or positional rules. Instead,
 
 13. DERIVED FINANCIALS — ACT AS AN ACCOUNTANT.
     Even if a summary field appears blank or as a placeholder in the 
-    document, if the document contains numeric line items, identify all 
-    standard financial summaries that an accountant would normally compute 
-    from those items and include them. Derive only what the numbers support. 
-    Use the document's own labels where they exist; otherwise create a 
+    document, if the document contains numeric line items, you MUST compute 
+    and include all financial summaries an accountant would produce.
+
+    MANDATORY CALCULATION PROTOCOL — NO EXCEPTIONS:
+    Step 1: Write down every line item amount.
+    Step 2: Add them one by one. Write the running total after each addition.
+    Step 3: Apply any tax rate found in the document to the result of Step 2.
+    Step 4: Add Step 2 + Step 3 to get the final total.
+    Step 5: Verify: re-add every number from Step 1 again independently.
+    Step 6: If Step 4 and Step 5 do not match exactly — STOP and recalculate.
+    Step 7: Only write the output AFTER Step 5 confirms Step 4.
+
+    A wrong total is a critical failure. There is zero tolerance for 
+    arithmetic errors. The number you write MUST equal the sum you computed.
+    
+    Use the document's own labels where they exist. Otherwise create a 
     concise label in the document's language.
 
 ━━━ OUTPUT ━━━
