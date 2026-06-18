@@ -840,7 +840,7 @@ async function callGitHub(
       model:       VISION_MODEL,
       messages,
       temperature: 0,
-      max_tokens:  16000,
+      max_tokens:  32000,
     };
 
     const res = await fetch(GITHUB_API, {
