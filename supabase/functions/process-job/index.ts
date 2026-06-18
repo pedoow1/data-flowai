@@ -8,7 +8,7 @@ const MISTRAL_API        = "https://api.mistral.ai/v1/chat/completions";
 const GITHUB_TOKEN       = (Deno.env.get("GITHUB_TOKEN") || "").trim();
 const GITHUB_API         = "https://models.inference.ai.azure.com/chat/completions";
 const TEXT_MODEL         = "mistral-small-2506";
-const VISION_MODEL       = "gpt-4o";
+const VISION_MODEL       = "gpt-4.1";
 const REQUEST_TIMEOUT_MS = 90_000;
 
 // ── Batching ──────────────────────────────────────────────────────────────────
@@ -18,6 +18,8 @@ const FALLBACK_CHUNK_SIZE       = 12_000;
 const SINGLE_REQUEST_CHAR_LIMIT = 10_000;
 const FALLBACK_CHUNK_OVERLAP    = 350;
 const BATCH_DELAY_MS            = 1_500;
+const PAGE_BREAK                = "\f";
+const PAGES_PER_BATCH           = 10;
 
 // ── Pattern detection ─────────────────────────────────────────────────────────
 const PATTERN_SAMPLE_CHARS = 20_000;
@@ -34,25 +36,137 @@ const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
 });
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-type Cell        = { v: string; c: number };
+type CellType = "string" | "number" | "integer" | "date";
+type Cell     = { v: string; c: number; _type?: CellType };
 type FlexibleRow = Record<string, Cell>;
 
-// ── Summary row keywords (Arabic + English) ───────────────────────────────────
+// ── Semantic field classification ─────────────────────────────────────────────
+//
+// Coercion is opt-in, not opt-out.
+//
+// Only fields whose semantic purpose is measurement, counting, aggregation, or
+// calculation are converted to numeric types. Everything else — identifiers,
+// references, codes, labels, addresses, names, notes — stays as text and its
+// original representation is preserved exactly (including leading zeros,
+// separators, prefixes, and alphanumeric patterns).
+//
+// The guard is applied against BOTH the raw field name as it appears in the
+// document AND its canonicalized equivalent, so it works regardless of how a
+// vendor labels the field.
+
+/** Fields whose value is a monetary amount used in arithmetic. */
+const MONETARY_FIELDS = new Set([
+  // Common raw labels (English)
+  "AMOUNT (USD)", "UNIT PRICE (USD)", "SUBTOTAL", "DISCOUNT (5%)",
+  "TAXABLE AMOUNT", "SALES TAX (8.25%)", "TOTAL DUE (USD)",
+  "Amount", "Unit Price", "Subtotal", "Discount", "Total Due",
+  "Sub Total", "Net Amount", "Grand Total", "Amount Due", "Balance Due",
+  "Tax Amount", "VAT Amount", "GST Amount", "Sales Tax",
+  // Canonicalized keys
+  "amount", "unitPrice", "subtotal", "tax", "total",
+]);
+
+/** Fields whose value is a countable whole-number quantity used in arithmetic. */
+const INTEGER_FIELDS = new Set([
+  "QTY", "Qty", "Quantity", "quantity",
+]);
+
+/** Fields whose value is a calendar date to be normalized to ISO 8601. */
+const DATE_FIELDS = new Set([
+  "Invoice Date", "Due Date", "Issue Date", "Issued", "Payment Due",
+  // Canonicalized keys
+  "date", "dueDate", "invoiceDate",
+]);
+
+//
+// No IDENTIFIER_FIELDS blocklist. The model below is:
+//   1. Is this field explicitly known to be calculative? → coerce.
+//   2. Otherwise → preserve as text, unconditionally.
+//
+// This means a field like "Zip Code", "Phone", "Account Number",
+// "Routing Number", "SWIFT Code", "Serial Number", or any future
+// vendor-specific code that isn't pre-listed will always be kept as text,
+// without needing to enumerate every possible identifier in advance.
 
 // ── Prompts ───────────────────────────────────────────────────────────────────
-const FLEXIBLE_PROMPT = `You are an elite invoice data extraction agent. Extract every piece of information from the invoice.
+const FLEXIBLE_PROMPT = `You are a document understanding and data extraction system. Your task is to read the document provided and extract all of its information as structured data.
 
-CRITICAL RULES:
-1. LINE ITEM SPLITTING: Every invoice may contain multiple line items. Create a SEPARATE row for each line item. Never merge items.
-2. HEADER FIELDS (repeat in every row): fields that belong to the invoice as a whole — client name, address, phone, tax number, invoice number, date, due date, payment method. These appear once per invoice but must be copied into every line item row.
-3. SUMMARY FIELDS (first row only): fields that summarize the whole invoice and are NOT per-item — e.g. subtotal, discount, tax amount, grand total, amount in words. Put these values ONLY in the FIRST line item row of each invoice. Leave them EMPTY in all subsequent rows of the same invoice.
-4. LINE ITEM FIELDS: fields that are specific to each item — e.g. item name, description, quantity, unit price, item total. These change per row.
-5. FIELD NAMES: Use the EXACT label as written in the invoice — Arabic labels for Arabic invoices, English camelCase for English. Look everywhere: column headers, side labels, footer fields, summary boxes. Every label = a separate field. Never invent, translate, or merge field names.
-6. Extract ALL invoices, ALL pages, ALL line items. Never skip anything.
-7. Copy every value EXACTLY — never truncate, round, or reformat.
-8. Return ONLY a valid JSON array, no prose, no markdown, no code fences.`;
+APPROACH — SEMANTIC, NOT TEMPLATE-BASED:
+Do not apply fixed templates, assumed field names, or positional rules. Instead, read the document as a whole, understand what it contains, and extract every piece of information based on its meaning, role, and relationships within the document. The document may be an invoice, receipt, purchase order, statement, contract, form, or any other business document. Adapt completely to whatever you find.
 
-const USER_SUFFIX = `\n\nReturn a JSON ARRAY. For each invoice output all line item rows with field names taken EXACTLY from the invoice column headers in their original language — Arabic if the invoice is Arabic, English if English. Do not translate, invent, or merge field names, and keep all strings exact.`;
+━━━ DOCUMENT STRUCTURE ━━━
+
+1. UNDERSTAND THE DOCUMENT BEFORE EXTRACTING.
+   Read the entire document first. Identify:
+   - What type of document this is.
+   - Who the parties are and what their roles are (issuer, recipient, shipper, payer, etc.).
+   - What sections the document contains (header, line items, summary, notes, terms, etc.).
+   - What tables or lists are present, and what each column or field represents semantically.
+
+2. DISTINGUISH STRUCTURAL LEVELS.
+   Not all fields have the same scope. Classify each piece of information by its role:
+   - DOCUMENT-LEVEL: applies to the whole document (e.g. invoice number, issue date, parties, payment terms, currency, totals, notes).
+   - LINE-ITEM-LEVEL: specific to one product, service, or entry in a table (e.g. description, quantity, unit price, line total).
+   Do not confuse these levels. A document total is not a line-item field. A line-item description is not a document field.
+
+3. PRODUCE ONE ROW PER LINE ITEM.
+   If the document contains a table of line items, produce one output row per line item.
+   - Repeat document-level fields in every row (so each row is self-contained and can be processed independently).
+   - Place summary fields (totals, discounts, taxes, subtotals) ONLY in the FIRST line item row. Leave them empty in all subsequent rows of the same document.
+   - If the document has no line items, produce a single row containing all document fields.
+
+━━━ FIELD NAMES ━━━
+
+4. USE THE DOCUMENT'S OWN LABELS.
+   Use the exact field label as it appears in the document — in whatever language and script the document uses. Do not translate, rename, invent, merge, or split field names.
+   - If the document is in Arabic, use Arabic field names.
+   - If the document is in English, use English field names exactly as written.
+   - If a label is ambiguous or absent, describe the field's meaning concisely using the document's own language.
+
+5. NORMALIZE ONLY THESE TWO FIELDS, regardless of how they appear in the document:
+   - The document's unique identifier (Invoice #, Invoice Number, رقم الفاتورة, Folio, No., etc.) → always use key: "Invoice #"
+   - The recipient/customer/client (Billing To, Bill To, Client, Customer, المستلم, etc.) → always use key: "Billing To"
+   All other field names must be taken verbatim from the document.
+
+━━━ VALUES ━━━
+
+6. COPY VALUES EXACTLY.
+   Preserve every value exactly as it appears. Do not reformat, round, abbreviate, translate, or correct values.
+
+7. CLASSIFY VALUES BY SEMANTIC PURPOSE.
+   Determine the type of each value based on what it represents, not how it looks:
+   - Quantities, amounts, rates, prices, taxes, totals, percentages → numeric (these will be coerced by the system).
+   - Dates → preserve as-is (the system will normalize to ISO 8601).
+   - Identifiers, codes, reference numbers, account numbers, phone numbers, postal codes, serial numbers, model numbers, SKUs, SWIFT codes, routing numbers, and any other label or key → preserve as text, exactly as shown, including leading zeros, separators, and formatting.
+   Never convert an identifier to a number even if it contains only digits.
+
+━━━ ACCURACY ━━━
+
+8. MAINTAIN ROW INTEGRITY IN TABLES.
+   When reading a table, process one row at a time. For each row, read every column left to right before writing anything. Confirm that each value belongs to the current row — do not mix values across rows. If a table row spans multiple visual lines, treat it as a single logical row.
+
+9. VERIFY LINE-ITEM ARITHMETIC.
+   After reading each line item, check: quantity × unit price = line total. If they do not match, re-read the entire row from the source before writing. Do not silently correct mismatches — extract what the document states.
+
+━━━ UNCERTAINTY & QUALITY ━━━
+
+10. FLAG UNCERTAINTY EXPLICITLY.
+    If a value is unclear, partially visible, ambiguous, or could be read multiple ways, extract your best reading and append " [uncertain]" to that value. Do not guess silently.
+
+11. FLAG STRUCTURAL ANOMALIES.
+    If you detect a possible row-shift, column-shift, merged cell misread, or other table alignment issue, note it in a "_extraction_notes" field on the affected row. Be specific about what was observed.
+
+12. DO NOT SKIP ANYTHING.
+    Extract every piece of information visible in the document: all pages, all sections, all tables, all line items, all footer text, all notes, all terms, all metadata. Never omit a field because it seems unimportant.
+
+13. DO NOT ADD ANYTHING.
+    Do not infer, compute, or insert values that are not present in the document. Do not fill in assumed defaults. Only output what is explicitly present.
+
+━━━ OUTPUT ━━━
+
+Return ONLY a valid JSON array of objects. No prose, no markdown, no code fences, no commentary.`;
+
+const USER_SUFFIX = `\n\nReturn a JSON ARRAY. Each object represents one line item row (or a single row if the document has no line items). Use field names taken verbatim from the document in its original language and script. Apply the semantic classification rules above for field names and values.`;
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function wait(ms: number) {
@@ -68,6 +182,18 @@ function sanitizeText(text: string) {
     .replace(/\r/g, "")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/**
+ * Collapse OCR-introduced intra-cell line breaks within a single field value.
+ * A \n is replaced with a space unless it precedes a numbered list marker
+ * (e.g. "2. Late payments…"), which indicates intentional structure.
+ */
+function collapseInlineLF(value: string): string {
+  return value
+    .replace(/([^\n])\n(?!\d+\.\s)([^\n])/g, "$1 $2")
+    .replace(/\s{2,}/g, " ")
     .trim();
 }
 
@@ -88,6 +214,40 @@ function computeEtaSeconds(processedBatches: number, totalBatches: number, start
       ? (Date.now() - startedAtMs) / 1000 / processedBatches
       : BASELINE_SECONDS_PER_BATCH;
   return Math.max(1, Math.ceil(perBatchSec * remaining));
+}
+
+// ── Type coercion helpers ─────────────────────────────────────────────────────
+
+/**
+ * Parse a monetary string like "4,505.00" or "-225.25" into a number.
+ * Returns null if the value cannot be parsed.
+ */
+function tryParseMonetary(v: string): number | null {
+  const cleaned = v.replace(/,/g, "").trim();
+  const n = Number(cleaned);
+  return isNaN(n) ? null : n;
+}
+
+/**
+ * Parse common date formats into ISO 8601 (YYYY-MM-DD).
+ * Handles: "June 19, 2024", "Jun 19, 2024", "2024-06-19".
+ * Returns null if the format is not recognised.
+ */
+function tryParseDate(v: string): string | null {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+
+  const MONTHS: Record<string, string> = {
+    january: "01", february: "02", march: "03",    april: "04",
+    may:     "05", june:     "06", july:  "07",    august: "08",
+    september: "09", october: "10", november: "11", december: "12",
+  };
+
+  const m = v.match(/^(\w+)\s+(\d{1,2}),?\s+(\d{4})$/i);
+  if (m) {
+    const month = MONTHS[m[1].toLowerCase()];
+    if (month) return `${m[3]}-${month}-${m[2].padStart(2, "0")}`;
+  }
+  return null;
 }
 
 // ── Supabase job helpers ──────────────────────────────────────────────────────
@@ -245,6 +405,29 @@ function splitByPattern(text: string, pattern: RegExp): string[] {
   return segments.length > 0 ? segments : [text];
 }
 
+// ── Fallback: تقسيم بالصفحات (form-feed \f) ──────────────────────────────────
+function splitIntoPages(text: string): string[] {
+  if (!text.includes(PAGE_BREAK)) return [text];
+  return text.split(PAGE_BREAK).map((p) => p.trim()).filter((p) => p.length > 0);
+}
+
+function fallbackChunkByPages(text: string, pagesPerBatch: number): string[] {
+  const pages = splitIntoPages(text);
+
+  if (pages.length <= 1) {
+    console.log("[process-job] fallbackChunkByPages: no \\f page breaks found → char-based fallback");
+    return fallbackChunkText(text, FALLBACK_CHUNK_SIZE, FALLBACK_CHUNK_OVERLAP);
+  }
+
+  console.log(`[process-job] fallbackChunkByPages: ${pages.length} page(s) → batches of ${pagesPerBatch}`);
+
+  const batches: string[] = [];
+  for (let i = 0; i < pages.length; i += pagesPerBatch) {
+    batches.push(pages.slice(i, i + pagesPerBatch).join("\n\n"));
+  }
+  return batches;
+}
+
 // ── Fallback: تقسيم بالحروف ───────────────────────────────────────────────────
 function findChunkBoundary(text: string, start: number, desiredEnd: number) {
   if (desiredEnd >= text.length) return text.length;
@@ -289,13 +472,13 @@ async function buildInvoiceBatches(text: string): Promise<string[]> {
   if (pattern) {
     invoices = splitByPattern(sanitized, pattern);
   } else {
-    console.log("[process-job] buildInvoiceBatches: no pattern found → char-based fallback");
-    return fallbackChunkText(sanitized, FALLBACK_CHUNK_SIZE, FALLBACK_CHUNK_OVERLAP);
+    console.log("[process-job] buildInvoiceBatches: no pattern found → page-based fallback");
+    return fallbackChunkByPages(sanitized, PAGES_PER_BATCH);
   }
 
   if (invoices.length <= 1) {
-    console.log("[process-job] buildInvoiceBatches: 1 segment only → char-based fallback");
-    return fallbackChunkText(sanitized, FALLBACK_CHUNK_SIZE, FALLBACK_CHUNK_OVERLAP);
+    console.log("[process-job] buildInvoiceBatches: 1 segment only → page-based fallback");
+    return fallbackChunkByPages(sanitized, PAGES_PER_BATCH);
   }
 
   const batches: string[] = [];
@@ -367,11 +550,52 @@ function normalizeRow(x: unknown): FlexibleRow | null {
 
   const source = x as Record<string, unknown>;
   const out: FlexibleRow = {};
+
   for (const key of Object.keys(source)) {
-    const cell = toCell(source[key]);
+    let cell = toCell(source[key]);
     if (!cell || !cell.v || cell.v === "—") continue;
+
+    const canonized = canonKey(key);
+
+    // ── Collapse OCR-introduced intra-cell line breaks ────────────────────────
+    cell = { ...cell, v: collapseInlineLF(cell.v) };
+
+    // ── Semantic type coercion — opt-in only ──────────────────────────────────
+    //
+    // Coercion is applied exclusively to fields whose semantic purpose is
+    // calculative (measurement, counting, aggregation). Any field not
+    // explicitly recognized as calculative is preserved as text, retaining
+    // its original representation exactly — including leading zeros,
+    // separators, prefixes, and alphanumeric patterns.
+    //
+    // Check both the raw document label and its canonicalized equivalent so
+    // the logic works regardless of vendor-specific naming.
+
+    if (MONETARY_FIELDS.has(key) || MONETARY_FIELDS.has(canonized)) {
+      const n = tryParseMonetary(cell.v);
+      if (n !== null) {
+        cell = { v: String(n), c: cell.c, _type: "number" };
+      }
+
+    } else if (INTEGER_FIELDS.has(key) || INTEGER_FIELDS.has(canonized)) {
+      const n = parseInt(cell.v, 10);
+      if (!isNaN(n)) {
+        cell = { v: String(n), c: cell.c, _type: "integer" };
+      }
+
+    } else if (DATE_FIELDS.has(key) || DATE_FIELDS.has(canonized)) {
+      const iso = tryParseDate(cell.v);
+      if (iso) {
+        cell = { v: iso, c: cell.c, _type: "date" };
+      }
+
+    }
+    // All other fields: _type remains undefined → treated as "string" by
+    // downstream consumers. No transformation is applied.
+
     if (!out[key]) out[key] = cell;
   }
+
   return Object.keys(out).length > 0 ? out : null;
 }
 
@@ -400,6 +624,37 @@ function rowSig(r: FlexibleRow): string {
   return Object.entries(r).map(([k, c]) => `${k}=${c.v}`).sort().join("|").toLowerCase();
 }
 
+function clearDuplicateSummaryFields(rows: FlexibleRow[]): FlexibleRow[] {
+  if (rows.length <= 1) return rows;
+
+  const invoiceKey = "Invoice #";
+  const groups = new Map<string, number[]>();
+  rows.forEach((row, i) => {
+    const inv = row[invoiceKey]?.v ?? "__no_invoice__";
+    if (!groups.has(inv)) groups.set(inv, []);
+    groups.get(inv)!.push(i);
+  });
+
+  const result = rows.map((r) => ({ ...r }));
+
+  for (const indices of groups.values()) {
+    if (indices.length <= 1) continue;
+    const firstRow = result[indices[0]];
+    const summaryFields = Object.keys(firstRow).filter((key) => {
+      const firstVal = firstRow[key]?.v;
+      if (!firstVal || firstVal.trim() === "") return false;
+      return indices.slice(1).every((i) => result[i][key]?.v === firstVal);
+    });
+    for (const i of indices.slice(1)) {
+      for (const key of summaryFields) {
+        delete result[i][key];
+      }
+    }
+  }
+
+  return result;
+}
+
 function dedupeRows(rows: FlexibleRow[]) {
   const seen = new Set<string>();
   const out: FlexibleRow[] = [];
@@ -410,6 +665,88 @@ function dedupeRows(rows: FlexibleRow[]) {
     out.push(row);
   }
   return out;
+}
+
+function isRedundantRow(row: FlexibleRow, prev: FlexibleRow | null): boolean {
+  if (!prev) return false;
+  const newEntries = Object.entries(row).filter(([, c]) => c?.v && c.v.trim() !== "");
+  if (newEntries.length === 0) return true;
+  return newEntries.every(([k, c]) => prev[k]?.v === c.v);
+}
+
+// ── Math validation & flagging ────────────────────────────────────────────────
+
+/**
+ * Resolves a numeric value from a row by trying every key whose canonicalized
+ * form matches one of the provided canonical names. Returns NaN if not found
+ * or not parseable. This makes validation work regardless of how a vendor
+ * labels a field (e.g. "QTY", "Qty", "Quantity", "الكمية" all resolve to "quantity").
+ */
+function resolveNumeric(row: FlexibleRow, ...canonNames: string[]): number {
+  for (const [key, cell] of Object.entries(row)) {
+    if (canonNames.includes(canonKey(key))) {
+      const n = parseFloat(cell.v);
+      if (!isNaN(n)) return n;
+    }
+  }
+  return NaN;
+}
+
+/**
+ * Validates internal mathematical consistency for each row using canonicalized
+ * field resolution — no hardcoded field name strings. Attaches a
+ * `_validation_flags` cell listing any detected discrepancies.
+ * Values are never silently modified — only flagged.
+ *
+ * Checks performed:
+ *   1. Line-item integrity:  quantity × unitPrice = amount
+ *   2. Tax composition:      taxableAmount + tax = total  (when all three present)
+ *   3. Subtotal composition: subtotal - discount = taxableAmount (when all three present)
+ *   4. Flags " [uncertain]" values that arrived from the model's own uncertainty markers.
+ */
+function validateAndFlagRows(rows: FlexibleRow[]): FlexibleRow[] {
+  return rows.map((row) => {
+    const flags: string[] = [];
+
+    // ── 1. Line-item: quantity × unitPrice = amount ───────────────────────────
+    const qty       = resolveNumeric(row, "quantity");
+    const unitPrice = resolveNumeric(row, "unitPrice");
+    const amount    = resolveNumeric(row, "amount");
+
+    if (!isNaN(qty) && !isNaN(unitPrice) && !isNaN(amount)) {
+      const expected = Math.round(qty * unitPrice * 100) / 100;
+      if (Math.abs(expected - amount) > 0.02) {
+        flags.push(`LINE_AMOUNT_MISMATCH: ${qty} × ${unitPrice} = ${expected}, stated ${amount}`);
+      }
+    }
+
+    // ── 2. Summary: taxableAmount + tax = total ───────────────────────────────
+    const taxable = resolveNumeric(row, "subtotal");   // taxable base after discount
+    const tax     = resolveNumeric(row, "tax");
+    const total   = resolveNumeric(row, "total");
+
+    if (!isNaN(taxable) && !isNaN(tax) && !isNaN(total)) {
+      const expectedTotal = Math.round((taxable + tax) * 100) / 100;
+      if (Math.abs(expectedTotal - total) > 0.02) {
+        flags.push(`TOTAL_MISMATCH: ${taxable} + ${tax} = ${expectedTotal}, stated ${total}`);
+      }
+    }
+
+    // ── 3. Uncertainty markers passed through from the model ──────────────────
+    const uncertainFields = Object.entries(row)
+      .filter(([, cell]) => cell.v.includes("[uncertain]"))
+      .map(([key]) => key);
+    if (uncertainFields.length > 0) {
+      flags.push(`UNCERTAIN_VALUES: ${uncertainFields.join(", ")}`);
+    }
+
+    if (flags.length === 0) return row;
+
+    return {
+      ...row,
+      _validation_flags: { v: flags.join(" | "), c: 50, _type: "string" as CellType },
+    };
+  });
 }
 
 // ── Response parser ───────────────────────────────────────────────────────────
@@ -429,9 +766,13 @@ function parseResponse(
   try { parsed = JSON.parse(cleaned); }
   catch { return { ok: false, error: "Model returned an unparseable response." }; }
 
-  const rows = toRowArray(parsed)
+  const rawRows = toRowArray(parsed)
     .map(normalizeRow)
     .filter((row): row is FlexibleRow => row !== null);
+
+  const rows = rawRows.filter((row, i) =>
+    !isRedundantRow(row, i > 0 ? rawRows[i - 1] : null)
+  );
 
   if (rows.length === 0) return { ok: false, error: "Model response contained no usable rows." };
   return { ok: true, rows };
@@ -487,9 +828,6 @@ async function runWithRetry(
   return { ok: false, error: `${lastError} Please try again.` };
 }
 
-// ── Image data URL passed directly to GitHub Models ─────────────────────────
-
-
 // ── GitHub Models API call (vision) ──────────────────────────────────────────
 async function callGitHub(
   messages: unknown[],
@@ -531,30 +869,30 @@ async function runGitHubWithRetry(
 
       if (status === 200) {
         const result = parseResponse(status, bodyText);
-        return result ?? { ok: false, error: "Failed to parse GitHub Models response." };
+        return result ?? { ok: false, error: "Failed to parse vision response." };
       }
 
-      console.error(`[process-job] GitHub Models ${status}:`, bodyText.slice(0, 300));
+      console.error(`[process-job] Vision API ${status}:`, bodyText.slice(0, 300));
 
       if (status === 429) {
-        lastError     = "GitHub Models rate limit reached.";
+        lastError     = "Vision API rate limit reached.";
         const delayMs = 10_000 * attempt;
         await wait(delayMs);
         continue;
       }
       if ([502, 503, 504, 524].includes(status)) {
-        lastError = "GitHub Models is temporarily unavailable.";
+        lastError = "Vision API is temporarily unavailable.";
         await wait(4_000 * attempt);
         continue;
       }
       if (status === 401 || status === 403) {
-        return { ok: false, error: "GitHub Models authentication failed — check GITHUB_TOKEN." };
+        return { ok: false, error: "Vision API authentication failed — check GITHUB_TOKEN." };
       }
-      return { ok: false, error: `GitHub Models error (${status}).` };
+      return { ok: false, error: `Vision API error (${status}).` };
 
     } catch (error: any) {
       const aborted = error?.name === "AbortError";
-      lastError     = aborted ? "GitHub Models request timed out." : (error?.message ?? "Network error");
+      lastError     = aborted ? "Vision API request timed out." : (error?.message ?? "Network error");
       if (aborted) await wait(3_000 * attempt);
       else         await wait(2_000 * attempt);
     }
@@ -563,74 +901,120 @@ async function runGitHubWithRetry(
   return { ok: false, error: `${lastError} Please try again.` };
 }
 
-// ── Self-review pass for image OCR correction ─────────────────────────────────
-async function selfReviewImage(
+// ── Merge two extraction passes — always prefer pass2 ────────────────────────
+function mergePassRows(pass1: FlexibleRow[], pass2: FlexibleRow[]): FlexibleRow[] {
+  if (pass2.length === 0) return pass1;
+  if (pass1.length !== pass2.length) {
+    console.log(
+      `[process-job] mergePassRows: row count mismatch (${pass1.length} vs ${pass2.length}) → using pass2`
+    );
+    return pass2;
+  }
+
+  return pass2.map((row2, i) => {
+    const row1   = pass1[i];
+    const merged: FlexibleRow = { ...row2 };
+    for (const key of Object.keys(row1)) {
+      if (!merged[key]?.v) merged[key] = row1[key];
+    }
+    return merged;
+  });
+}
+
+// ── Pass 2: fresh re-extraction from scratch (no draft shown) ─────────────────
+async function pass2ExtractImage(
   imageDataUrl: string,
-  draft: FlexibleRow[],
 ): Promise<FlexibleRow[]> {
-  console.log("[process-job] selfReviewImage: starting OCR correction pass...");
-
-  const reviewPrompt = `You previously extracted this JSON from the invoice image:
-
-${JSON.stringify(draft, null, 2)}
-
-Now look at the ORIGINAL IMAGE again carefully and do a FULL review and correction pass.
-
-Check and fix ALL of the following:
-1. OCR errors: misread characters in Arabic or English (e.g. "طعم" → "طقم", "lnvoice" → "Invoice", "O" vs "0").
-2. Wrong field placement: make sure each value is in the correct field. For example, "الصنف" must contain the item category, and "الوصف" must contain the item description — not swapped.
-3. Wrong field names: if a field name is misread or garbled (e.g. "الرقم الصري" instead of "الرقم الضريبي"), correct the field name too.
-4. Missing or swapped values between columns: re-read each row against the image and make sure every value matches its column.
-
-Rules:
-- Do NOT add or remove rows.
-- Do NOT change the number of fields per row.
-- Keep the EXACT same JSON structure and array length.
-- Return ONLY the corrected JSON array, no prose, no markdown, no code fences.`;
+  console.log("[process-job] pass2ExtractImage: fresh re-extraction from scratch...");
 
   const { status, bodyText } = await callGitHub([
     {
       role: "user",
       content: [
         { type: "image_url", image_url: { url: imageDataUrl, detail: "high" } },
-        { type: "text", text: reviewPrompt },
+        {
+          type: "text",
+          text: `${FLEXIBLE_PROMPT}
+
+VERIFICATION PASS — ADDITIONAL INSTRUCTIONS:
+- Treat this as an independent, fresh read. Do not assume anything about the document's structure before examining it.
+- Read every table cell character by character, digit by digit.
+- For every row in every table: read all columns left to right as a unit before writing any value. Confirm each value belongs to the current row.
+- Verify arithmetic where possible (e.g. quantity × unit price = line total). If the numbers do not agree, extract what the document states and add " [uncertain]" to the affected values.
+- If any value is partially obscured, ambiguous, or difficult to read, extract your best reading and append " [uncertain]".
+- Do not guess, interpolate, or infer any value. Only output what is explicitly visible.
+
+${USER_SUFFIX.trim()}`,
+        },
       ],
     },
   ]);
 
   if (status !== 200) {
-    console.warn(`[process-job] selfReviewImage: GitHub Models returned ${status} → skipping correction`);
-    return draft;
+    console.warn(`[process-job] pass2ExtractImage: vision API returned ${status} → skipping`);
+    return [];
   }
 
   const content = extractContent(bodyText);
-  if (!content) {
-    console.warn("[process-job] selfReviewImage: empty response → skipping correction");
-    return draft;
-  }
+  if (!content) return [];
 
   const cleaned = content.trim()
     .replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
 
   let parsed: unknown;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch {
-    console.warn("[process-job] selfReviewImage: unparseable response → skipping correction");
-    return draft;
-  }
+  try { parsed = JSON.parse(cleaned); }
+  catch { return []; }
 
-  const correctedRows = toRowArray(parsed)
+  return toRowArray(parsed)
     .map(normalizeRow)
-    .filter((row): row is FlexibleRow => row !== null);
+    .filter((r): r is FlexibleRow => r !== null);
+}
 
-  if (correctedRows.length === 0) {
-    console.warn("[process-job] selfReviewImage: no rows after parse → skipping correction");
-    return draft;
+async function pass2ExtractImageBatch(
+  imageDataUrls: string[],
+): Promise<FlexibleRow[]> {
+  console.log(`[process-job] pass2ExtractImageBatch: fresh re-extraction (${imageDataUrls.length} page(s))...`);
+
+  const content: unknown[] = imageDataUrls.map((url) => ({
+    type: "image_url",
+    image_url: { url, detail: "high" },
+  }));
+
+  content.push({
+    type: "text",
+    text: `${FLEXIBLE_PROMPT}
+
+VERIFICATION PASS — ADDITIONAL INSTRUCTIONS:
+- Treat this as an independent, fresh read across all pages provided. Do not assume anything about the document's structure before examining it.
+- Read every table cell on every page character by character, digit by digit.
+- For every row in every table: read all columns left to right as a unit before writing any value. Confirm each value belongs to the current row.
+- Verify arithmetic where possible (e.g. quantity × unit price = line total). If the numbers do not agree, extract what the document states and add " [uncertain]" to the affected values.
+- If any value is partially obscured, ambiguous, or difficult to read, extract your best reading and append " [uncertain]".
+- Do not guess, interpolate, or infer any value. Only output what is explicitly visible.
+
+${USER_SUFFIX.trim()}`,
+  });
+
+  const { status, bodyText } = await callGitHub([{ role: "user", content }]);
+
+  if (status !== 200) {
+    console.warn(`[process-job] pass2ExtractImageBatch: vision API returned ${status} → skipping`);
+    return [];
   }
 
-  console.log(`[process-job] selfReviewImage: ✓ corrected ${correctedRows.length} row(s)`);
-  return correctedRows;
+  const text = extractContent(bodyText);
+  if (!text) return [];
+
+  const cleaned = text.trim()
+    .replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
+
+  let parsed: unknown;
+  try { parsed = JSON.parse(cleaned); }
+  catch { return []; }
+
+  return toRowArray(parsed)
+    .map(normalizeRow)
+    .filter((r): r is FlexibleRow => r !== null);
 }
 
 // ── Process one batch ─────────────────────────────────────────────────────────
@@ -684,7 +1068,7 @@ async function processBatches(
       );
 
       await updateJob(jobId, {
-        current_stage:    `Batch ${groupIdx + 1}/${totalGroups} — processing ${groupBatches.length} part(s) in parallel`,
+        current_stage:    `Processing part ${groupIdx + 1} of ${totalGroups}...`,
         progress:         computeProgress(groupIdx, totalGroups),
         processed_chunks: groupStart,
         total_chunks:     totalChunks,
@@ -741,9 +1125,21 @@ async function finalizeJob(jobId: string) {
     return;
   }
 
+  const cleaned   = clearDuplicateSummaryFields(rows);
+  const validated = validateAndFlagRows(cleaned);
+  const deduped   = dedupeRows(validated);
+
+  // Surface validation warnings so callers are aware of flagged rows.
+  const flaggedCount = deduped.filter((r) => r._validation_flags?.v).length;
+  if (flaggedCount > 0) {
+    warnings.push(
+      `${flaggedCount} row(s) have validation flags — check the _validation_flags field for details.`
+    );
+  }
+
   await updateJob(jobId, {
     status:        "completed",
-    output:        { rows: dedupeRows(rows), warnings },
+    output:        { rows: deduped, warnings },
     current_stage: warnings.length > 0 ? "Completed with warnings" : "Completed",
     progress:      100,
     eta_seconds:   0,
@@ -751,35 +1147,62 @@ async function finalizeJob(jobId: string) {
   });
 }
 
+// ── Image-pages batch processor ───────────────────────────────────────────────
+const IMAGES_PER_BATCH = 4;
+
+async function processImageBatch(
+  imageDataUrls: string[],
+  fileName: string,
+  batchIndex: number,
+  totalBatches: number,
+): Promise<{ ok: true; rows: FlexibleRow[] } | { ok: false; error: string; batchIndex: number }> {
+  console.log(`[process-job] Image batch ${batchIndex + 1}/${totalBatches} (${imageDataUrls.length} page(s))`);
+
+  const content: unknown[] = imageDataUrls.map((url) => ({
+    type: "image_url",
+    image_url: { url, detail: "high" },
+  }));
+  content.push({
+    type: "text",
+    text: `${FLEXIBLE_PROMPT}\n\nDocument filename: ${fileName}\nBatch ${batchIndex + 1}/${totalBatches}${USER_SUFFIX}`,
+  });
+
+  const result = await runGitHubWithRetry([{ role: "user", content }]);
+  if (result.ok) {
+    console.log(`[process-job] Image batch ${batchIndex + 1}/${totalBatches} ✓ — ${result.rows.length} row(s)`);
+    return result;
+  }
+  return { ...result, batchIndex };
+}
+
 // ── Main job processor ────────────────────────────────────────────────────────
 async function processJob(jobId: string, job: any) {
   const input = job.input as {
-    kind: "text" | "image";
+    kind: "text" | "image" | "image_pages";
     text?: string;
     imageDataUrl?: string;
+    imageDataUrls?: string[];
     fileName: string;
   };
 
   const fileName  = input.fileName;
   const startedAt = Date.now();
 
-  // ── Image ────────────────────────────────────────────────────────────────
+  // ── Single image ─────────────────────────────────────────────────────────
   if (input.kind === "image") {
     await updateJob(jobId, {
       status:           "processing",
       started_at:       new Date().toISOString(),
-      current_stage:    "Scanning image with GPT-4o (Pass 1: extraction)",
-      progress:         25,
+      current_stage:    "Scanning document... (Pass 1)",
+      progress:         20,
       total_chunks:     1,
       processed_chunks: 0,
-      eta_seconds:      60,
+      eta_seconds:      90,
     });
 
     const imageDataUrl = input.imageDataUrl ?? "";
 
-    const [_hdr, _b64] = imageDataUrl.split(",");
-    const _mime = _hdr.match(/data:(.*);base64/)?.[1] || "image/jpeg";
-
+    // Pass 1
     const pass1Result = await runGitHubWithRetry([
       {
         role: "user",
@@ -800,21 +1223,141 @@ async function processJob(jobId: string, job: any) {
       return;
     }
 
+    // Pass 2: fresh re-extraction
     await updateJob(jobId, {
-      current_stage: "Reviewing OCR results (Pass 2: self-review)",
-      progress:      65,
-      eta_seconds:   30,
+      current_stage: "Verifying extracted data... (Pass 2)",
+      progress:      55,
+      eta_seconds:   45,
     });
 
-    const correctedRows = await selfReviewImage(imageDataUrl, pass1Result.rows);
+    const pass2Rows = await pass2ExtractImage(imageDataUrl);
+
+    // Merge
+    await updateJob(jobId, {
+      current_stage: "Finalizing results...",
+      progress:      85,
+      eta_seconds:   10,
+    });
+
+    const merged    = pass2Rows.length > 0 ? mergePassRows(pass1Result.rows, pass2Rows) : pass1Result.rows;
+    const validated = validateAndFlagRows(merged);
+    const deduped   = dedupeRows(clearDuplicateSummaryFields(validated));
+
+    const flaggedCount = deduped.filter((r) => r._validation_flags?.v).length;
+    const warnings     = flaggedCount > 0
+      ? [`${flaggedCount} row(s) have validation flags — check the _validation_flags field for details.`]
+      : [];
 
     await updateJob(jobId, {
       status:           "completed",
-      output:           { rows: dedupeRows(correctedRows), warnings: [] },
-      current_stage:    "Completed",
+      output:           { rows: deduped, warnings },
+      current_stage:    warnings.length > 0 ? "Completed with warnings" : "Completed",
       progress:         100,
       processed_chunks: 1,
       total_chunks:     1,
+      eta_seconds:      0,
+      completed_at:     new Date().toISOString(),
+    });
+    return;
+  }
+
+  // ── Multi-page images (PDF rendered as images) ────────────────────────────
+  if (input.kind === "image_pages") {
+    const pages = input.imageDataUrls ?? [];
+    if (pages.length === 0) {
+      await updateJob(jobId, {
+        status:        "failed",
+        error:         "No image pages provided.",
+        current_stage: "Failed",
+        completed_at:  new Date().toISOString(),
+      });
+      return;
+    }
+
+    const batches: string[][] = [];
+    for (let i = 0; i < pages.length; i += IMAGES_PER_BATCH) {
+      batches.push(pages.slice(i, i + IMAGES_PER_BATCH));
+    }
+    const totalBatches = batches.length;
+
+    await updateJob(jobId, {
+      status:           "processing",
+      started_at:       new Date().toISOString(),
+      current_stage:    `Scanning ${pages.length} page(s)...`,
+      progress:         10,
+      total_chunks:     totalBatches,
+      processed_chunks: 0,
+      eta_seconds:      totalBatches * 90,
+    });
+
+    const allRows: FlexibleRow[] = [];
+    const warnings: string[]     = [];
+    const heartbeat = setInterval(() => { void beat(jobId); }, 10_000);
+
+    try {
+      for (let i = 0; i < totalBatches; i++) {
+        const batch = batches[i];
+
+        // Pass 1
+        await updateJob(jobId, {
+          current_stage:    `Extracting data (part ${i + 1} of ${totalBatches})...`,
+          progress:         clamp(Math.round(10 + (i / totalBatches) * 40), 10, 50),
+          processed_chunks: i,
+          eta_seconds:      (totalBatches - i) * 90,
+        });
+
+        const result = await processImageBatch(batch, fileName, i, totalBatches);
+
+        if (result.ok) {
+          // Pass 2: fresh re-extraction
+          await updateJob(jobId, {
+            current_stage: `Verifying data (part ${i + 1} of ${totalBatches})...`,
+            progress:      clamp(Math.round(50 + (i / totalBatches) * 40), 50, 90),
+          });
+
+          const pass2Rows = await pass2ExtractImageBatch(batch);
+
+          const finalRows = pass2Rows.length > 0
+            ? mergePassRows(result.rows, pass2Rows)
+            : result.rows;
+
+          allRows.push(...finalRows);
+        } else {
+          warnings.push(`Part ${i + 1} failed: ${result.error}`);
+        }
+
+        if (i + 1 < totalBatches) await wait(BATCH_DELAY_MS);
+      }
+    } finally {
+      clearInterval(heartbeat);
+    }
+
+    if (allRows.length === 0) {
+      await updateJob(jobId, {
+        status:        "failed",
+        error:         warnings[0] ?? "Failed to extract data from image pages.",
+        current_stage: "Failed",
+        completed_at:  new Date().toISOString(),
+      });
+      return;
+    }
+
+    const validated    = validateAndFlagRows(allRows);
+    const deduped      = dedupeRows(clearDuplicateSummaryFields(validated));
+    const flaggedCount = deduped.filter((r) => r._validation_flags?.v).length;
+    if (flaggedCount > 0) {
+      warnings.push(
+        `${flaggedCount} row(s) have validation flags — check the _validation_flags field for details.`
+      );
+    }
+
+    await updateJob(jobId, {
+      status:           "completed",
+      output:           { rows: deduped, warnings },
+      current_stage:    warnings.length > 0 ? "Completed with warnings" : "Completed",
+      progress:         100,
+      processed_chunks: totalBatches,
+      total_chunks:     totalBatches,
       eta_seconds:      0,
       completed_at:     new Date().toISOString(),
     });
@@ -841,7 +1384,7 @@ async function processJob(jobId: string, job: any) {
   );
 
   await updateJob(jobId, {
-    current_stage:    `Prepared ${batches.length} batch(es)`,
+    current_stage:    `Prepared ${batches.length} part(s) for processing`,
     progress:         PROGRESS_START,
     total_chunks:     batches.length,
     processed_chunks: 0,
