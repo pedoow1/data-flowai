@@ -160,11 +160,11 @@ Do not apply fixed templates, assumed field names, or positional rules. Instead,
     Extract every piece of information visible in the document: all pages, all sections, all tables, all line items, all footer text, all notes, all terms, all metadata. Never omit a field because it seems unimportant.
 
 13. DERIVED FINANCIALS — ACT AS AN ACCOUNTANT.
-    If the document contains numeric line items, identify all standard 
-    financial summaries that an accountant would normally compute from 
-    those items and include them — even if their fields are blank or 
-    absent in the document. Derive only what the numbers support. Use 
-    the document's own labels where they exist; otherwise create a 
+    Even if a summary field appears blank or as a placeholder in the 
+    document, if the document contains numeric line items, identify all 
+    standard financial summaries that an accountant would normally compute 
+    from those items and include them. Derive only what the numbers support. 
+    Use the document's own labels where they exist; otherwise create a 
     concise label in the document's language.
 
 ━━━ OUTPUT ━━━
