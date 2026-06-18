@@ -159,8 +159,15 @@ Do not apply fixed templates, assumed field names, or positional rules. Instead,
 12. DO NOT SKIP ANYTHING.
     Extract every piece of information visible in the document: all pages, all sections, all tables, all line items, all footer text, all notes, all terms, all metadata. Never omit a field because it seems unimportant.
 
-13. DO NOT ADD ANYTHING.
-    Do not infer, compute, or insert values that are not present in the document. Do not fill in assumed defaults. Only output what is explicitly present.
+13. COMPUTE MISSING SUMMARY FIELDS.
+    If a summary field (such as subtotal, tax, or total) is absent or left blank
+    in the document but can be derived from available data, compute it and include
+    it using the document's own field name or a descriptive label in the document's
+    language. For example: if line items have quantities and unit prices, sum them
+    to produce a subtotal; if a tax rate is stated, apply it; if subtotal and tax
+    are known, compute the total. All other fields that are not derivable must not
+    be invented — only output what is explicitly present or mathematically derivable
+    from what is present.
 
 ━━━ OUTPUT ━━━
 
