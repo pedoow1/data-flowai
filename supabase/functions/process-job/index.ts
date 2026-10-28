@@ -5,10 +5,8 @@ const SUPABASE_URL       = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY        = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const MISTRAL_API_KEY    = (Deno.env.get("MISTRAL_API_KEY") || "").trim();
 const MISTRAL_API        = "https://api.mistral.ai/v1/chat/completions";
-const GITHUB_TOKEN       = (Deno.env.get("GITHUB_TOKEN") || "").trim();
-const GITHUB_API         = "https://models.inference.ai.azure.com/chat/completions";
-const TEXT_MODEL         = "mistral-small-2506";
-const VISION_MODEL       = "gpt-4.1";
+const TEXT_MODEL         = "ministral-14b-2512";
+const VISION_MODEL       = "ministral-14b-2512";
 const REQUEST_TIMEOUT_MS = 90_000;
 
 // ── Batching ──────────────────────────────────────────────────────────────────
@@ -184,6 +182,18 @@ Do not apply fixed templates, assumed field names, or positional rules. Instead,
 Return ONLY a valid JSON array of objects. No prose, no markdown, no code fences, no commentary.`;
 
 const USER_SUFFIX = `\n\nReturn a JSON ARRAY. Each object represents one line item row (or a single row if the document has no line items). Use field names taken verbatim from the document in its original language and script. Apply the semantic classification rules above for field names and values.`;
+
+// ── Image-specific financial reminder ─────────────────────────────────────────
+// Appended to every image prompt to reinforce Rule 13 for vision models that
+// tend to write notes instead of computing blank summary fields.
+const IMAGE_FINANCIALS_REMINDER = `
+
+CRITICAL — BLANK FINANCIAL FIELDS:
+If the document contains blank or unfilled summary fields (e.g. subtotal, tax amount, grand total, VAT, discount), you MUST calculate and fill them yourself. Do NOT leave them empty, do NOT write a note instead of a value.
+- Sum all line item amounts → Subtotal.
+- Apply any tax rate visible in the document (e.g. 15% VAT) → Tax Amount.
+- Subtotal + Tax Amount → Grand Total / Final Amount.
+Writing "_extraction_notes" instead of computing these values is a critical failure. Always output the calculated number in the appropriate field.`;
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function wait(ms: number) {
@@ -845,8 +855,8 @@ async function runWithRetry(
   return { ok: false, error: `${lastError} Please try again.` };
 }
 
-// ── GitHub Models API call (vision) ──────────────────────────────────────────
-async function callGitHub(
+// ── Mistral Vision API call ───────────────────────────────────────────────────
+async function callMistralVision(
   messages: unknown[],
 ): Promise<{ status: number; bodyText: string }> {
   const controller = new AbortController();
@@ -860,11 +870,11 @@ async function callGitHub(
       max_tokens:  32000,
     };
 
-    const res = await fetch(GITHUB_API, {
+    const res = await fetch(MISTRAL_API, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization:  `Bearer ${GITHUB_TOKEN}`,
+        Authorization:  `Bearer ${MISTRAL_API_KEY}`,
       },
       signal: controller.signal,
       body:   JSON.stringify(body),
@@ -875,14 +885,14 @@ async function callGitHub(
   }
 }
 
-async function runGitHubWithRetry(
+async function runMistralVisionWithRetry(
   messages: unknown[],
 ): Promise<{ ok: true; rows: FlexibleRow[] } | { ok: false; error: string }> {
   let lastError = "Unknown error";
 
   for (let attempt = 1; attempt <= 4; attempt++) {
     try {
-      const { status, bodyText } = await callGitHub(messages);
+      const { status, bodyText } = await callMistralVision(messages);
 
       if (status === 200) {
         const result = parseResponse(status, bodyText);
@@ -903,7 +913,7 @@ async function runGitHubWithRetry(
         continue;
       }
       if (status === 401 || status === 403) {
-        return { ok: false, error: "Vision API authentication failed — check GITHUB_TOKEN." };
+        return { ok: false, error: "Vision API authentication failed — check MISTRAL_API_KEY." };
       }
       return { ok: false, error: `Vision API error (${status}).` };
 
@@ -944,14 +954,14 @@ async function pass2ExtractImage(
 ): Promise<FlexibleRow[]> {
   console.log("[process-job] pass2ExtractImage: fresh re-extraction from scratch...");
 
-  const { status, bodyText } = await callGitHub([
+  const { status, bodyText } = await callMistralVision([
     {
       role: "user",
       content: [
-        { type: "image_url", image_url: { url: imageDataUrl, detail: "high" } },
+        { type: "image_url", image_url: { url: imageDataUrl } },
         {
           type: "text",
-          text: `${FLEXIBLE_PROMPT}
+          text: `${FLEXIBLE_PROMPT}${IMAGE_FINANCIALS_REMINDER}
 
 VERIFICATION PASS — ADDITIONAL INSTRUCTIONS:
 - Treat this as an independent, fresh read. Do not assume anything about the document's structure before examining it.
@@ -994,12 +1004,12 @@ async function pass2ExtractImageBatch(
 
   const content: unknown[] = imageDataUrls.map((url) => ({
     type: "image_url",
-    image_url: { url, detail: "high" },
+    image_url: { url },
   }));
 
   content.push({
     type: "text",
-    text: `${FLEXIBLE_PROMPT}
+    text: `${FLEXIBLE_PROMPT}${IMAGE_FINANCIALS_REMINDER}
 
 VERIFICATION PASS — ADDITIONAL INSTRUCTIONS:
 - Treat this as an independent, fresh read across all pages provided. Do not assume anything about the document's structure before examining it.
@@ -1012,7 +1022,7 @@ VERIFICATION PASS — ADDITIONAL INSTRUCTIONS:
 ${USER_SUFFIX.trim()}`,
   });
 
-  const { status, bodyText } = await callGitHub([{ role: "user", content }]);
+  const { status, bodyText } = await callMistralVision([{ role: "user", content }]);
 
   if (status !== 200) {
     console.warn(`[process-job] pass2ExtractImageBatch: vision API returned ${status} → skipping`);
@@ -1177,14 +1187,14 @@ async function processImageBatch(
 
   const content: unknown[] = imageDataUrls.map((url) => ({
     type: "image_url",
-    image_url: { url, detail: "high" },
+    image_url: { url },
   }));
   content.push({
     type: "text",
-    text: `${FLEXIBLE_PROMPT}\n\nDocument filename: ${fileName}\nBatch ${batchIndex + 1}/${totalBatches}${USER_SUFFIX}`,
+    text: `${FLEXIBLE_PROMPT}${IMAGE_FINANCIALS_REMINDER}\n\nDocument filename: ${fileName}\nBatch ${batchIndex + 1}/${totalBatches}${USER_SUFFIX}`,
   });
 
-  const result = await runGitHubWithRetry([{ role: "user", content }]);
+  const result = await runMistralVisionWithRetry([{ role: "user", content }]);
   if (result.ok) {
     console.log(`[process-job] Image batch ${batchIndex + 1}/${totalBatches} ✓ — ${result.rows.length} row(s)`);
     return result;
@@ -1220,12 +1230,12 @@ async function processJob(jobId: string, job: any) {
     const imageDataUrl = input.imageDataUrl ?? "";
 
     // Pass 1
-    const pass1Result = await runGitHubWithRetry([
+    const pass1Result = await runMistralVisionWithRetry([
       {
         role: "user",
         content: [
-          { type: "image_url", image_url: { url: imageDataUrl, detail: "high" } },
-          { type: "text", text: `${FLEXIBLE_PROMPT}\n\nDocument filename: ${fileName}${USER_SUFFIX}` },
+          { type: "image_url", image_url: { url: imageDataUrl } },
+          { type: "text", text: `${FLEXIBLE_PROMPT}${IMAGE_FINANCIALS_REMINDER}\n\nDocument filename: ${fileName}${USER_SUFFIX}` },
         ],
       },
     ]);
@@ -1436,6 +1446,7 @@ Deno.serve(async (req) => {
       });
     }
 
+    console.log(`[process-job] MISTRAL_API_KEY length=${MISTRAL_API_KEY.length}, model=${VISION_MODEL}`);
     if (!MISTRAL_API_KEY) {
       return new Response(JSON.stringify({ error: "Missing MISTRAL_API_KEY" }), {
         status: 500, headers: { "Content-Type": "application/json" },
